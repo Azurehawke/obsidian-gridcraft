@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+
+      - name: Engine tests
+        run: cargo test --manifest-path engine/Cargo.toml
+
+      - name: Install wasm-opt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir="$RUNNER_TEMP/binaryen"
+          mkdir -p "$dir"
+          gh release download --repo WebAssembly/binaryen --pattern '*x86_64-linux.tar.gz' --dir "$dir"
+          tar -xzf "$dir"/*.tar.gz -C "$dir"
+          bin=$(dirname "$(find "$dir" -type f -name wasm-opt | head -n 1)")
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/wasm-opt" --version
+
+      - name: Build engine
+        run: bash scripts/build-engine.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build plugin
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Assemble test copy of the plugin folder
+        run: |
+          version=$(node -p "require('./manifest.json').version")
+          mkdir -p out/gridcraft-viewer
+          cp main.js manifest.json styles.css out/gridcraft-viewer/
+          cp engine/pkg/gridcraft_obsidian_engine_bg.wasm "out/gridcraft-viewer/engine-$version.wasm"
+          ls -l out/gridcraft-viewer
+          gzip -9 -c engine/pkg/gridcraft_obsidian_engine_bg.wasm | wc -c | awk '{ printf "engine gzipped: %d bytes\n", $1 }'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gridcraft-viewer
+          path: out/gridcraft-viewer

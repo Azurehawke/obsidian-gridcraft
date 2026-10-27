@@ -1,0 +1,8 @@
+node_modules/
+main.js
+engine/target/
+engine/pkg/
+out/
+*.wasm
+*.wasm.gz
+data.json

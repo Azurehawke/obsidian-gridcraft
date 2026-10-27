@@ -1,0 +1,10 @@
+{
+	"id": "gridcraft-viewer",
+	"name": "GridCraft Viewer",
+	"version": "0.1.0",
+	"minAppVersion": "1.5.0",
+	"description": "Open .xlsx and .csv files in a read-only tab, using GridCraft's spreadsheet engine.",
+	"author": "Azurehawke",
+	"authorUrl": "https://github.com/Azurehawke",
+	"isDesktopOnly": false
+}

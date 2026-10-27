@@ -1,0 +1,154 @@
+/* GridCraft Viewer */
+
+.gc-view {
+	display: flex;
+	flex-direction: column;
+	padding: 0 !important;
+	overflow: hidden;
+}
+
+.gc-body {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.gc-notice {
+	flex: 0 0 auto;
+	padding: 4px 12px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.gc-scroll {
+	flex: 1 1 auto;
+	overflow: auto;
+	min-height: 0;
+}
+
+.gc-message {
+	max-width: 36em;
+	margin: 3em auto;
+	padding: 0 1em;
+	color: var(--text-muted);
+	text-align: center;
+	white-space: pre-wrap;
+	user-select: text;
+}
+
+.gc-message.gc-error {
+	color: var(--text-error);
+}
+
+.gc-empty {
+	padding: 2em;
+	color: var(--text-faint);
+}
+
+/* The grid */
+
+.gc-grid {
+	--gc-border-auto: var(--text-normal);
+	--gc-gridline: var(--background-modifier-border);
+	border-collapse: separate;
+	border-spacing: 0;
+	table-layout: fixed;
+	font-size: var(--font-ui-small);
+	line-height: 1.25;
+	color: var(--text-normal);
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.gc-grid td {
+	padding: 1px 4px;
+	border-right: 1px solid var(--gc-gridline);
+	border-bottom: 1px solid var(--gc-gridline);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	vertical-align: bottom;
+	text-align: left;
+}
+
+.gc-grid td.gc-r {
+	text-align: right;
+}
+
+.gc-grid td.gc-c {
+	text-align: center;
+}
+
+.gc-grid td.gc-spill {
+	overflow: visible;
+	text-overflow: clip;
+}
+
+.gc-grid th {
+	font-weight: normal;
+	color: var(--text-muted);
+	background: var(--background-secondary);
+	border-right: 1px solid var(--background-modifier-border);
+	border-bottom: 1px solid var(--background-modifier-border);
+	padding: 1px 4px;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.gc-grid thead th {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	text-align: center;
+}
+
+.gc-grid th.gc-rowhead {
+	position: sticky;
+	left: 0;
+	z-index: 1;
+	text-align: right;
+}
+
+.gc-grid th.gc-corner {
+	position: sticky;
+	left: 0;
+	top: 0;
+	z-index: 3;
+}
+
+/* Sheet tabs */
+
+.gc-tabs {
+	flex: 0 0 auto;
+	display: flex;
+	gap: 2px;
+	overflow-x: auto;
+	padding: 4px 8px;
+	border-top: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+
+.gc-tab {
+	flex: 0 0 auto;
+	font-size: var(--font-ui-small);
+	padding: 2px 12px;
+	height: auto;
+	box-shadow: none;
+	background: transparent;
+	color: var(--text-muted);
+	border-radius: var(--radius-s);
+}
+
+.gc-tab:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.gc-tab.is-active {
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+}

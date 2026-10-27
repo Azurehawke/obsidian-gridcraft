@@ -1,0 +1,18 @@
+{
+	"name": "obsidian-gridcraft",
+	"version": "0.1.0",
+	"private": true,
+	"description": "GridCraft Viewer: open .xlsx and .csv files in Obsidian, using GridCraft's spreadsheet engine.",
+	"license": "MIT",
+	"scripts": {
+		"engine": "bash scripts/build-engine.sh",
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc --noEmit && node esbuild.config.mjs production"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"esbuild": "^0.25.0",
+		"obsidian": "latest",
+		"typescript": "^5.6.0"
+	}
+}
