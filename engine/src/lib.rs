@@ -13,8 +13,9 @@
 use std::collections::{HashMap, HashSet};
 
 use gridcraft_engine::core::{CellRef, RangeRef, Value, col_to_letters};
+use gridcraft_engine::cf::{CfCache, CfLook};
 use gridcraft_engine::{DocState, Session, Trust};
-use gridcraft_engine::model::{BorderLine, BorderStyle, Color, Fill, HAlign, PatternType, Style, StyleId, Theme, Underline, VAlign, Visibility, Workbook};
+use gridcraft_engine::model::{BorderLine, BorderStyle, Color, HAlign, PatternType, Sheet, Style, Theme, Underline, VAlign, Visibility, Workbook};
 use serde_json::{Map, Value as Json, json};
 use wasm_bindgen::prelude::*;
 
@@ -150,6 +151,100 @@ impl Book {
         wb.sheets.iter().position(|sh| sh.name.to_lowercase() == want).and_then(|i| i32::try_from(i).ok()).unwrap_or(-1)
     }
 
+    /// Runs a GridCraft command (`home.bold`, `home.fillColor`, `home.formatAsTable`, ...) on
+    /// `sheet` with JSON params, as the ribbon would; records one undo step. Returns its result
+    /// as JSON. `sheet` is added to the params, and becomes the active sheet first (some
+    /// commands act on the active sheet).
+    pub fn run(&mut self, sheet: usize, id: &str, params_json: &str) -> Result<String, JsError> {
+        let mut params: Json = if params_json.trim().is_empty() { json!({}) } else { serde_json::from_str(params_json).map_err(js)? };
+        let Some(obj) = params.as_object_mut() else { return Err(JsError::new("Command parameters must be a JSON object.")) };
+        obj.entry("sheet").or_insert(json!(sheet));
+        if self.wb()?.active_sheet != sheet {
+            self.session.execute("sheet.activate", json!({ "sheet": sheet })).map_err(js)?;
+        }
+        let out = self.session.execute(id, params).map_err(js)?;
+        Ok(out.to_string())
+    }
+
+    /// The format of one cell, for the toolbar's toggle buttons. JSON:
+    /// `{ bold, italic, underline, strike, wrap, h, v, numFmt, size, font, fontColor, fill,
+    ///    merged, table: { name, style, header, totals, banded, ... } | null }`.
+    #[wasm_bindgen(js_name = cellFormat)]
+    pub fn cell_format(&self, sheet: usize, cell: &str) -> Result<String, JsError> {
+        let wb = self.wb()?;
+        let sh = wb.sheet(sheet).ok_or_else(|| JsError::new("This sheet doesn't exist."))?;
+        let c = CellRef::parse(cell).ok_or_else(|| JsError::new(&format!("'{cell}' isn't a cell.")))?;
+        let st = wb.styles.get(sh.style_id(c));
+        let hex = |col: Color| col.resolve(&wb.theme).map(hex3);
+        let table = sh.table_at(c).map(|t| {
+            json!({ "name": t.name, "style": t.style, "header": t.header_row, "totals": t.totals_row,
+                    "banded": t.banded_rows, "bandedCols": t.banded_cols, "firstCol": t.first_col, "lastCol": t.last_col })
+        });
+        Ok(json!({
+            "bold": st.font.bold,
+            "italic": st.font.italic,
+            "underline": st.font.underline != Underline::None,
+            "strike": st.font.strike,
+            "wrap": st.align.wrap,
+            "h": format!("{:?}", st.align.h),
+            "v": format!("{:?}", st.align.v),
+            "numFmt": st.num_fmt.as_str(),
+            "size": st.font.size,
+            "font": st.font.name,
+            "fontColor": hex(st.font.color),
+            "fill": if st.fill.pattern == PatternType::None { None } else { hex(st.fill.fg) },
+            "merged": sh.merge_at(c).is_some(),
+            "table": table,
+        })
+        .to_string())
+    }
+
+    /// The colour picker's swatches. JSON: `{ theme: [[{ theme, tint, hex }, ...6 shades] x10],
+    /// standard: ["#C00000", ...] }`: the workbook's theme colours (Background 1, Text 1,
+    /// Background 2, Text 2, Accent 1-6) with their lighter and darker shades.
+    pub fn palette(&self) -> String {
+        let theme = self.wb().map(|wb| wb.theme.clone()).unwrap_or_default();
+        let columns: Vec<Json> = (0u8..10)
+            .map(|slot| {
+                let tints: &[f64] = match slot {
+                    0 => &[0.0, -0.05, -0.15, -0.25, -0.35, -0.5],
+                    1 | 3 => &[0.0, 0.5, 0.35, 0.25, 0.15, 0.05],
+                    _ => &[0.0, 0.8, 0.6, 0.4, -0.25, -0.5],
+                };
+                let shades: Vec<Json> = tints
+                    .iter()
+                    .map(|&t| {
+                        // Tints are kept in thousandths, as the workbook stores them.
+                        let thousandths = (t * 1000.0).round() as i16;
+                        let hex = Color::Theme(slot, thousandths).resolve(&theme).map(hex3);
+                        json!({ "theme": slot, "tint": t, "hex": hex })
+                    })
+                    .collect();
+                Json::Array(shades)
+            })
+            .collect();
+        let standard = ["#C00000", "#FF0000", "#FFC000", "#FFFF00", "#92D050", "#00B050", "#00B0F0", "#0070C0", "#002060", "#7030A0"];
+        json!({ "theme": columns, "standard": standard }).to_string()
+    }
+
+    /// The Format as Table gallery: `[{ name, family, header, headerFont, band, body, line }]`
+    /// with each style's colours in this workbook's theme.
+    #[wasm_bindgen(js_name = tableStyles)]
+    pub fn table_styles(&self) -> String {
+        let theme = self.wb().map(|wb| wb.theme.clone()).unwrap_or_default();
+        let hex = |c: Option<Color>| c.and_then(|c| c.resolve(&theme)).map(hex3);
+        let list: Vec<Json> = gridcraft_engine::tables::gallery()
+            .into_iter()
+            .map(|name| {
+                let lk = gridcraft_engine::tables::look(&name);
+                let (family, _) = gridcraft_engine::tables::parse_style_name(&name);
+                json!({ "name": name, "family": family, "header": hex(lk.header_fill), "headerFont": hex(Some(lk.header_font)),
+                        "band": hex(lk.band_fill), "body": hex(lk.body_fill), "line": hex(lk.line) })
+            })
+            .collect();
+        Json::Array(list).to_string()
+    }
+
     /// A block of cells as JSON, for the plugin's table.
     ///
     /// `range` is A1 notation (`B2:F40`, `A:D`, `3:9`, `C5`); empty means from A1 to the end
@@ -202,7 +297,8 @@ impl Book {
         }
 
         let theme = &wb.theme;
-        let mut style_index: HashMap<StyleId, usize> = HashMap::new();
+        let mut cf = if sh.cond_formats.is_empty() { None } else { Some(CfCache::new()) };
+        let mut style_index: HashMap<String, usize> = HashMap::new();
         let mut styles: Vec<String> = Vec::new();
         let mut rows_out: Vec<Json> = Vec::with_capacity(vis_rows.len());
         for &row in &vis_rows {
@@ -214,13 +310,16 @@ impl Book {
                 }
                 let span = anchors.get(&(row, col)).copied();
                 let src = span.map(|(c, _, _)| c).unwrap_or(CellRef::new(row, col));
-                let id = sh.style_id(src);
-                let style = wb.styles.get(id);
+                let look = cell_look(wb, sheet, sh, src, &mut cf);
+                let style = &look.style;
                 let value = sh.value(src);
                 let mut cell = Map::new();
+                let hide = look.cf.as_ref().is_some_and(|l| l.hide_value);
                 if !matches!(value, Value::Empty) {
                     let f = gridcraft_engine::display::format(&value, style.num_fmt.as_str(), wb);
-                    cell.insert("t".into(), Json::from(f.text));
+                    if !hide {
+                        cell.insert("t".into(), Json::from(f.text));
+                    }
                     if style.align.h == HAlign::General {
                         let a = match value {
                             Value::Bool(_) | Value::Error(_) => Some("c"),
@@ -235,15 +334,17 @@ impl Book {
                         cell.insert("fc".into(), Json::from(format!("#{r:02X}{g:02X}{b:02X}")));
                     }
                 }
-                if id != StyleId::default() {
+                if let Some((glyph, color)) = look.cf.as_ref().and_then(|l| l.icon.as_ref()).map(|(set, i)| icon_glyph(set, *i)) {
+                    cell.insert("ic".into(), json!([glyph, color]));
+                }
+                let css = look_css(&look, theme);
+                if !css.is_empty() {
                     let next = styles.len();
-                    let i = *style_index.entry(id).or_insert_with(|| {
-                        styles.push(style_css(style, theme));
+                    let i = *style_index.entry(css).or_insert_with_key(|k| {
+                        styles.push(k.clone());
                         next
                     });
-                    if styles.get(i).is_some_and(|css| !css.is_empty()) {
-                        cell.insert("s".into(), Json::from(i));
-                    }
+                    cell.insert("s".into(), Json::from(i));
                 }
                 if let Some((_, rs, cs)) = span {
                     if cs > 1 {
@@ -304,9 +405,70 @@ fn round1(x: f32) -> f64 {
     (f64::from(x) * 10.0).round() / 10.0
 }
 
-/// CSS for a cell style. Black text and white fills are left out, so cells follow the
-/// Obsidian theme (readable in dark mode) unless the workbook chose a real colour.
-fn style_css(s: &Style, theme: &Theme) -> String {
+/// A cell's effective look: its own style, its table's style, and conditional formats.
+struct Look {
+    style: Style,
+    /// Fill from a colour scale, over the style's own fill.
+    scale_fill: Option<[u8; 3]>,
+    cf: Option<CfLook>,
+}
+
+fn cell_look(wb: &Workbook, sheet: usize, sh: &Sheet, c: CellRef, cf: &mut Option<CfCache>) -> Look {
+    let mut style = match sh.table_at(c) {
+        Some(t) => gridcraft_engine::tables::table_cell_style(wb, sheet, t, c),
+        None => wb.styles.get(sh.style_id(c)).clone(),
+    };
+    let cfl = cf.as_mut().and_then(|cache| cache.look(wb, sheet, c));
+    if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
+        if st.fill.pattern != PatternType::None {
+            style.fill = st.fill;
+        }
+        if st.font.color != Color::Auto {
+            style.font.color = st.font.color;
+        }
+        style.font.bold |= st.font.bold;
+        style.font.italic |= st.font.italic;
+        style.font.strike |= st.font.strike;
+        if st.font.underline != Underline::None {
+            style.font.underline = st.font.underline;
+        }
+        // In a differential style General means "not set".
+        if st.num_fmt.as_str() != "General" {
+            style.num_fmt = st.num_fmt.clone();
+        }
+        for (dst, src) in [
+            (&mut style.borders.left, st.borders.left),
+            (&mut style.borders.right, st.borders.right),
+            (&mut style.borders.top, st.borders.top),
+            (&mut style.borders.bottom, st.borders.bottom),
+        ] {
+            if src.style != BorderStyle::None {
+                *dst = src;
+            }
+        }
+    }
+    let scale_fill = cfl.as_ref().and_then(|l| l.scale_fill);
+    Look { style, scale_fill, cf: cfl }
+}
+
+fn hex3([r, g, b]: [u8; 3]) -> String {
+    format!("#{r:02X}{g:02X}{b:02X}")
+}
+
+/// Relative luminance (0 dark .. 1 light).
+fn luminance([r, g, b]: [u8; 3]) -> f64 {
+    let lin = |v: u8| {
+        let v = f64::from(v) / 255.0;
+        if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+/// CSS for a cell's look. Plain cells follow the Obsidian theme: black text and white fills are
+/// left out (readable in dark mode). On a coloured fill, automatic or black text becomes black
+/// or white, whichever reads better on that fill.
+fn look_css(look: &Look, theme: &Theme) -> String {
+    let s = &look.style;
     let mut css = String::new();
     let f = &s.font;
     if f.bold {
@@ -328,12 +490,33 @@ fn style_css(s: &Style, theme: &Theme) -> String {
     if f.size.is_finite() && f.size > 1.0 && (f.size - 11.0).abs() > 0.05 {
         css.push_str(&format!("font-size:{:.3}em;", f.size.clamp(4.0, 96.0) / 11.0));
     }
-    if let Some(hex) = color_hex(f.color, theme, [0, 0, 0]) {
-        css.push_str(&format!("color:{hex};"));
+
+    let fill = look.scale_fill.or_else(|| match s.fill.pattern {
+        PatternType::None => None,
+        // Patterns other than solid are drawn as their foreground colour.
+        _ => s.fill.fg.resolve(theme).filter(|rgb| *rgb != [255, 255, 255]),
+    });
+    let text = f.color.resolve(theme).filter(|rgb| *rgb != [0, 0, 0]);
+    match (fill, text) {
+        (Some(bg), None) => {
+            css.push_str(&format!("background-color:{};", hex3(bg)));
+            css.push_str(if luminance(bg) > 0.4 { "color:#000000;" } else { "color:#FFFFFF;" });
+        }
+        (Some(bg), Some(fg)) => css.push_str(&format!("background-color:{};color:{};", hex3(bg), hex3(fg))),
+        (None, Some(fg)) => css.push_str(&format!("color:{};", hex3(fg))),
+        (None, None) => {}
     }
-    if let Some(hex) = fill_hex(&s.fill, theme) {
-        css.push_str(&format!("background-color:{hex};"));
+    if let Some((frac, rgb, gradient)) = look.cf.as_ref().and_then(|l| l.bar) {
+        let pct = (f64::from(frac.clamp(0.0, 1.0)) * 100.0).round();
+        let [r, g, b] = rgb;
+        let bar = if gradient {
+            format!("linear-gradient(to right, rgba({r},{g},{b},0.75), rgba({r},{g},{b},0.15) {pct}%, transparent {pct}%)")
+        } else {
+            format!("linear-gradient(to right, rgba({r},{g},{b},0.6) {pct}%, transparent {pct}%)")
+        };
+        css.push_str(&format!("background-image:{bar};background-repeat:no-repeat;background-size:100% 70%;background-position:left center;"));
     }
+
     let b = &s.borders;
     for (side, line) in [("top", &b.top), ("right", &b.right), ("bottom", &b.bottom), ("left", &b.left)] {
         if let Some(v) = border_css(line, theme) {
@@ -361,6 +544,32 @@ fn style_css(s: &Style, theme: &Theme) -> String {
     css
 }
 
+/// A conditional-format icon as a text glyph and colour; index 0 is the lowest of `set`'s icons.
+fn icon_glyph(set: &str, index: usize) -> (&'static str, &'static str) {
+    let n = gridcraft_engine::model::icon_count(set).max(2);
+    let i = index.min(n - 1);
+    let step = (i * 4) / (n - 1); // 0..=4, low to high
+    let color = ["#D9534F", "#E8853B", "#E5B92A", "#8BBF3F", "#3EA55A"].get(step).copied().unwrap_or("#3EA55A");
+    let s = set.to_ascii_lowercase();
+    let pick = |glyphs: &[&'static str]| glyphs.get((step * (glyphs.len() - 1)) / 4).copied().unwrap_or("\u{25CF}");
+    let glyph = if s.contains("arrow") {
+        pick(&["\u{2193}", "\u{2198}", "\u{2192}", "\u{2197}", "\u{2191}"])
+    } else if s.contains("rating") || s.contains("bars") {
+        pick(&["\u{2581}", "\u{2583}", "\u{2585}", "\u{2587}", "\u{2588}"])
+    } else if s.contains("quarters") {
+        pick(&["\u{25CB}", "\u{25D4}", "\u{25D1}", "\u{25D5}", "\u{25CF}"])
+    } else if s.contains("star") {
+        pick(&["\u{2606}", "\u{2BEA}", "\u{2605}"])
+    } else if s.contains("triangle") {
+        pick(&["\u{25BC}", "\u{25AC}", "\u{25B2}"])
+    } else if s.contains("flag") {
+        "\u{2691}"
+    } else {
+        "\u{25CF}"
+    };
+    (glyph, color)
+}
+
 /// `#RRGGBB`, or `None` for automatic colours and for `skip` (the colour that would fight the
 /// Obsidian theme).
 fn color_hex(c: Color, theme: &Theme, skip: [u8; 3]) -> Option<String> {
@@ -370,14 +579,6 @@ fn color_hex(c: Color, theme: &Theme, skip: [u8; 3]) -> Option<String> {
     }
     let [r, g, b] = rgb;
     Some(format!("#{r:02X}{g:02X}{b:02X}"))
-}
-
-fn fill_hex(fill: &Fill, theme: &Theme) -> Option<String> {
-    match fill.pattern {
-        PatternType::None => None,
-        // Patterns other than solid are drawn as their foreground colour.
-        _ => color_hex(fill.fg, theme, [255, 255, 255]),
-    }
 }
 
 fn border_css(line: &BorderLine, theme: &Theme) -> Option<String> {
@@ -426,6 +627,35 @@ mod tests {
         let out = book.render(0, range, 0, 0).unwrap_or_else(|_| std::process::abort());
         let v: Json = serde_json::from_str(&out).unwrap_or_default();
         v["rows"][0]["c"][0]["t"].clone()
+    }
+
+    #[test]
+    fn formatting_commands_and_tables_render_with_colour() {
+        let mut book = Book::open("t.csv", b"Item,Qty\nBolts,12\nNuts,30\nWashers,7\n").unwrap_or_else(|_| std::process::abort());
+        book.run(0, "home.bold", r#"{"range":"A1:B1"}"#).unwrap_or_else(|_| std::process::abort());
+        book.run(0, "home.fillColor", r##"{"range":"B2","color":"#FFC000"}"##).unwrap_or_else(|_| std::process::abort());
+        let fmt: Json = serde_json::from_str(&book.cell_format(0, "A1").unwrap_or_default()).unwrap_or_default();
+        assert_eq!(fmt["bold"], true);
+        let out: Json = serde_json::from_str(&book.render(0, "A1:B4", 0, 0).unwrap_or_default()).unwrap_or_default();
+        let css = |r: usize, c: usize| {
+            let i = out["rows"][r]["c"][c]["s"].as_u64().unwrap_or(u64::MAX) as usize;
+            out["styles"][i].as_str().unwrap_or("").to_string()
+        };
+        assert!(css(0, 0).contains("font-weight:bold"));
+        assert!(css(1, 1).contains("background-color:#FFC000") && css(1, 1).contains("color:#000000"));
+        assert!(book.undo().unwrap_or(false));
+
+        book.run(0, "home.formatAsTable", r#"{"range":"A1:B4","style":"TableStyleMedium2"}"#).unwrap_or_else(|_| std::process::abort());
+        let fmt: Json = serde_json::from_str(&book.cell_format(0, "A2").unwrap_or_default()).unwrap_or_default();
+        assert_eq!(fmt["table"]["style"], "TableStyleMedium2");
+        let out: Json = serde_json::from_str(&book.render(0, "A1:B4", 0, 0).unwrap_or_default()).unwrap_or_default();
+        let i = out["rows"][0]["c"][0]["s"].as_u64().unwrap_or(u64::MAX) as usize;
+        assert!(out["styles"][i].as_str().unwrap_or("").contains("background-color:#"), "{out}");
+
+        let pal: Json = serde_json::from_str(&book.palette()).unwrap_or_default();
+        assert_eq!(pal["theme"].as_array().map(Vec::len), Some(10));
+        let styles: Json = serde_json::from_str(&book.table_styles()).unwrap_or_default();
+        assert_eq!(styles.as_array().map(Vec::len), Some(60));
     }
 
     #[test]
