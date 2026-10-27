@@ -18,8 +18,24 @@ are entered as in GridCraft and the sheet recalculates.
 | Esc | cancel the edit |
 | Delete, Backspace | clear the cell |
 | Ctrl+Z, Ctrl+Y (Cmd on a Mac) | undo, redo |
-| Ctrl+C, Ctrl+V | copy a cell; paste text (tab-separated lines fill a block) |
+| Shift+arrows, Shift+click, drag | select a range |
+| Ctrl+B, Ctrl+I, Ctrl+U | bold, italic, underline |
+| Ctrl+C, Ctrl+V | copy the selected cells; paste text (tab-separated lines fill a block) |
 | Ctrl+S | save now |
+
+### Formatting
+
+The toolbar under the formula bar formats the selected cells with GridCraft's own commands:
+bold, italic, underline, strikethrough, font size, font and fill colours (theme colours with
+shades, standard colours, or any colour), borders, alignment, wrap, merge & centre, number
+formats ($, %, decimals, dates), AutoFit column width and Clear formats. **Format as Table**
+applies one of 60 table styles (light, medium, dark) with banded rows; inside a table the same
+button changes its style and sets total row, banded rows and columns, first and last column.
+The palette button in the bar hides or shows the toolbar.
+
+Tables, conditional formats (fills, colour scales, data bars, icon sets) and cell colours show
+in the tab and in notes. In dark themes, text on a coloured fill switches to black or white so
+it stays readable.
 
 The file is saved a moment after each change ("Saved" in the corner) and when the tab closes.
 Saving rewrites the file with GridCraft's writer, as saving in GridCraft does. A `.csv` keeps
@@ -72,6 +88,8 @@ plugin update downloads the matching engine once and removes the old one.
 - **0.2**: sheets inside notes (embeds and the `gridcraft` code block), copy a table as
   Markdown or tab-separated text.
 - **0.3**: edit cells in the tab (formula bar, undo/redo, paste), saved automatically.
+- **0.4**: formatting toolbar, Format as Table, range selection; table styles and conditional
+  formats drawn in tabs and notes.
 
 ## Building
 

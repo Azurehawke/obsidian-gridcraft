@@ -6,6 +6,7 @@ import { FileView, Notice, Platform, setIcon, type TFile, type WorkspaceLeaf } f
 import { errorText, type Book, type EngineStatus } from "./engine";
 import type GridCraftPlugin from "./main";
 import { colLetters, Grid, type RenderData } from "./render";
+import { Ribbon, type CellFormat, type Palette, type TableStyleInfo } from "./ribbon";
 
 export const VIEW_TYPE = "gridcraft-sheet";
 export const EXTENSIONS = ["xlsx", "csv"];
@@ -19,6 +20,7 @@ const MAX_ROW = 1_048_575;
 const MAX_COL = 16_383;
 /** Saved this long after the last edit. */
 const SAVE_DELAY_MS = 1200;
+const RIBBON_KEY = "gridcraft-viewer-ribbon";
 
 interface SheetInfo {
 	name: string;
@@ -50,8 +52,14 @@ export class SheetView extends FileView {
 	private fetching = false;
 	private loadToken = 0;
 
+	/** The active cell, and the other corner of the selected range. */
 	private sel: Pos | null = null;
+	private anchor: Pos | null = null;
 	private selTd: HTMLElement | null = null;
+	private inRange: HTMLElement[] = [];
+	private dragging = false;
+	private ribbon!: Ribbon;
+	private ribbonBtn!: HTMLElement;
 	private editor: HTMLInputElement | null = null;
 	private saveTimer: number | null = null;
 	private saving: Promise<void> | null = null;
@@ -128,7 +136,16 @@ export class SheetView extends FileView {
 		this.redoEl = this.barEl.createDiv({ cls: "clickable-icon gc-redo", attr: { "aria-label": "Redo (Ctrl+Y)" } });
 		setIcon(this.redoEl, "redo");
 		this.stateEl = this.barEl.createDiv({ cls: "gc-state" });
+		this.ribbonBtn = this.barEl.createDiv({ cls: "clickable-icon gc-ribbon-toggle", attr: { "aria-label": "Show or hide formatting" } });
+		setIcon(this.ribbonBtn, "palette");
 		this.barEl.hide();
+		this.ribbon = new Ribbon(this.contentEl, {
+			run: (id, params, withRange) => this.runCommand(id, params ?? {}, withRange ?? true),
+			format: () => this.currentFormat(),
+			palette: () => this.parse<Palette>(() => this.book?.palette()),
+			tableStyles: () => this.parse<TableStyleInfo[]>(() => this.book?.tableStyles()) ?? [],
+		});
+		this.ribbon.el.hide();
 
 		const body = this.contentEl.createDiv({ cls: "gc-body" });
 		this.noticeEl = body.createDiv({ cls: "gc-notice" });
@@ -138,6 +155,8 @@ export class SheetView extends FileView {
 
 		this.registerDomEvent(this.scrollEl, "scroll", () => this.maybeFetchMore());
 		this.registerDomEvent(this.scrollEl, "mousedown", (e) => this.onMouseDown(e));
+		this.registerDomEvent(this.scrollEl, "mouseover", (e) => this.onMouseOver(e));
+		this.registerDomEvent(this.contentEl.ownerDocument, "mouseup", () => (this.dragging = false));
 		this.registerDomEvent(this.scrollEl, "dblclick", (e) => this.onDoubleClick(e));
 		this.registerDomEvent(this.scrollEl, "keydown", (e) => this.onGridKey(e));
 		this.registerDomEvent(this.scrollEl, "copy", (e) => this.onCopy(e));
@@ -145,6 +164,38 @@ export class SheetView extends FileView {
 		this.registerDomEvent(this.formulaEl, "keydown", (e) => this.onFormulaKey(e));
 		this.registerDomEvent(this.undoEl, "click", () => this.undoRedo(false));
 		this.registerDomEvent(this.redoEl, "click", () => this.undoRedo(true));
+		this.registerDomEvent(this.ribbonBtn, "click", () => {
+			const show = !this.ribbonShown();
+			try {
+				window.localStorage.setItem(RIBBON_KEY, show ? "1" : "0");
+			} catch {
+				// Not kept; fine.
+			}
+			this.applyRibbonShown();
+		});
+	}
+
+	private ribbonShown(): boolean {
+		try {
+			return window.localStorage.getItem(RIBBON_KEY) !== "0";
+		} catch {
+			return true;
+		}
+	}
+
+	private applyRibbonShown() {
+		const show = !!this.book && this.ribbonShown();
+		this.ribbon.el.toggle(show);
+		this.ribbonBtn.toggleClass("is-active", show);
+	}
+
+	private parse<T>(get: () => string | undefined): T | null {
+		try {
+			const text = get();
+			return text ? (JSON.parse(text) as T) : null;
+		} catch {
+			return null;
+		}
 	}
 
 	// ----- loading -----
@@ -171,6 +222,7 @@ export class SheetView extends FileView {
 			const firstVisible = this.info.sheets.findIndex((s) => !s.hidden);
 			this.sheet = byName >= 0 ? byName : active >= 0 ? active : Math.max(0, firstVisible);
 			this.barEl.show();
+			this.applyRibbonShown();
 			this.setSaveState("saved");
 			this.renderTabs();
 			this.showSheet();
@@ -186,7 +238,9 @@ export class SheetView extends FileView {
 		this.grid = null;
 		this.nextRow = null;
 		this.sel = null;
+		this.anchor = null;
 		this.selTd = null;
+		this.inRange = [];
 		this.editor = null;
 		if (this.book) {
 			try {
@@ -240,11 +294,13 @@ export class SheetView extends FileView {
 		const scrollLeft = this.scrollEl.scrollLeft;
 		const rowsShown = keep && this.grid ? this.grid.rows.length : 0;
 		const sel = keep ? this.sel : null;
+		const anchor = keep ? this.anchor : null;
 		this.editor = null;
 		this.scrollEl.empty();
 		this.grid = null;
 		this.nextRow = null;
 		this.selTd = null;
+		this.inRange = [];
 		this.setNotice(this.info.warnings ?? []);
 		try {
 			const first = this.fetch(0, Math.max(BLOCK_ROWS, rowsShown));
@@ -263,8 +319,10 @@ export class SheetView extends FileView {
 				this.scrollEl.scrollLeft = scrollLeft;
 			}
 			const cols = this.grid.columns;
-			if (sel) this.select(sel.r, sel.c, false);
-			else if (this.grid.rows.length && cols.length) this.select(this.grid.rows[0], cols[0], false);
+			if (sel) {
+				if (anchor) this.select(anchor.r, anchor.c, false);
+				this.select(sel.r, sel.c, false, !!anchor);
+			} else if (this.grid.rows.length && cols.length) this.select(this.grid.rows[0], cols[0], false);
 			this.maybeFetchMore();
 		} catch (e) {
 			this.message(`GridCraft couldn't show this sheet.\n\n${errorText(e)}`, true);
@@ -310,25 +368,84 @@ export class SheetView extends FileView {
 		return `${colLetters(p.c)}${p.r + 1}`;
 	}
 
-	private select(r: number, c: number, scroll = true) {
+	/** Selects a cell; with `extend`, the range from the anchor to it (the anchor stays). */
+	private select(r: number, c: number, scroll = true, extend = false) {
 		if (!this.grid || !this.book) return;
 		const td = this.grid.cell(r, c);
 		if (!td) return;
 		this.selTd?.removeClass("gc-sel");
 		this.sel = { r, c };
+		if (!extend || !this.anchor) this.anchor = { r, c };
 		this.selTd = td;
 		td.addClass("gc-sel");
-		this.nameEl.setText(this.a1(this.sel));
+		this.paintRange();
+		this.nameEl.setText(this.rangeA1());
 		try {
 			this.formulaEl.value = this.book.editText(this.sheet, this.a1(this.sel));
 		} catch {
 			this.formulaEl.value = "";
 		}
+		this.ribbon.update(this.currentFormat());
 		if (scroll) td.scrollIntoView({ block: "nearest", inline: "nearest" });
 	}
 
+	/** The selected rectangle in sheet rows and columns. */
+	private rect(): { r0: number; r1: number; c0: number; c1: number } | null {
+		const a = this.anchor ?? this.sel;
+		const b = this.sel;
+		if (!a || !b) return null;
+		return { r0: Math.min(a.r, b.r), r1: Math.max(a.r, b.r), c0: Math.min(a.c, b.c), c1: Math.max(a.c, b.c) };
+	}
+
+	private rangeA1(): string {
+		const r = this.rect();
+		if (!r) return "";
+		const tl = this.a1({ r: r.r0, c: r.c0 });
+		return r.r0 === r.r1 && r.c0 === r.c1 ? tl : `${tl}:${this.a1({ r: r.r1, c: r.c1 })}`;
+	}
+
+	private paintRange() {
+		for (const td of this.inRange) td.removeClass("gc-inrange");
+		this.inRange = [];
+		const r = this.rect();
+		const grid = this.grid;
+		if (!r || !grid || (r.r0 === r.r1 && r.c0 === r.c1)) return;
+		for (const row of grid.rows) {
+			if (row < r.r0 || row > r.r1) continue;
+			for (const col of grid.columns) {
+				if (col < r.c0 || col > r.c1) continue;
+				const td = grid.cell(row, col);
+				if (td) {
+					td.addClass("gc-inrange");
+					this.inRange.push(td);
+				}
+			}
+		}
+	}
+
+	private currentFormat(): CellFormat | null {
+		if (!this.sel) return null;
+		const at = this.a1(this.sel);
+		return this.parse<CellFormat>(() => this.book?.cellFormat(this.sheet, at));
+	}
+
+	/** Runs a GridCraft command on the selection (formatting, clearing, tables). */
+	private runCommand(id: string, params: Record<string, unknown>, withRange: boolean) {
+		if (!this.book || !this.sel) return;
+		if (!this.commitEdit()) return;
+		const all = withRange ? { range: this.rangeA1(), ...params } : params;
+		try {
+			this.book.run(this.sheet, id, JSON.stringify(all));
+		} catch (e) {
+			new Notice(`GridCraft couldn't do that: ${errorText(e)}`);
+			return;
+		}
+		this.afterEdit();
+		this.scrollEl.focus({ preventScroll: true });
+	}
+
 	/** Moves the selection by whole cells, stepping over merges and loading rows as needed. */
-	private move(dr: number, dc: number) {
+	private move(dr: number, dc: number, extend = false) {
 		const grid = this.grid;
 		if (!grid || !this.sel) return;
 		const rows = grid.rows;
@@ -336,7 +453,7 @@ export class SheetView extends FileView {
 		let ri = rows.indexOf(this.sel.r);
 		let ci = cols.indexOf(this.sel.c);
 		if (ri < 0 || ci < 0) return;
-		const td = this.selTd as HTMLTableCellElement | null;
+		const td = (extend ? null : this.selTd) as HTMLTableCellElement | null;
 		const stepR = dr > 0 ? Math.max(1, td?.rowSpan ?? 1) : dr < 0 ? -1 : 0;
 		const stepC = dc > 0 ? Math.max(1, td?.colSpan ?? 1) : dc < 0 ? -1 : 0;
 		ri += stepR;
@@ -345,7 +462,7 @@ export class SheetView extends FileView {
 			if (ri >= rows.length && this.nextRow !== null) this.maybeFetchMore(true);
 			if (ri < 0 || ci < 0 || ri >= rows.length || ci >= cols.length) return;
 			if (grid.cell(rows[ri], cols[ci])) {
-				this.select(rows[ri], cols[ci]);
+				this.select(rows[ri], cols[ci], true, extend);
 				return;
 			}
 			ri += Math.sign(stepR);
@@ -361,12 +478,24 @@ export class SheetView extends FileView {
 	}
 
 	private onMouseDown(e: MouseEvent) {
-		if (e.target === this.editor) return;
+		if (e.target === this.editor || e.button !== 0) return;
 		const p = this.cellAt(e.target);
 		if (!p) return;
+		// Dragging selects cells (as in a spreadsheet), not text; Ctrl+C copies the cells.
+		e.preventDefault();
 		this.commitEdit();
-		this.select(p.r, p.c, false);
-		// The grid (tabindex 0) takes keyboard focus from the click itself.
+		this.select(p.r, p.c, false, e.shiftKey);
+		this.dragging = true;
+		this.scrollEl.focus({ preventScroll: true });
+	}
+
+	private onMouseOver(e: MouseEvent) {
+		if (!this.dragging || (e.buttons & 1) === 0) {
+			this.dragging = false;
+			return;
+		}
+		const p = this.cellAt(e.target);
+		if (p && (p.r !== this.sel?.r || p.c !== this.sel?.c)) this.select(p.r, p.c, false, true);
 	}
 
 	private onDoubleClick(e: MouseEvent) {
@@ -387,17 +516,23 @@ export class SheetView extends FileView {
 		if (mod && !e.altKey) {
 			const k = key.toLowerCase();
 			if (k === "z" && !e.shiftKey) this.undoRedo(false);
+			else if (k === "b") this.runToggle("bold", "home.bold");
+			else if (k === "i") this.runToggle("italic", "home.italic");
+			else if (k === "u") this.runToggle("underline", "home.underline");
 			else if (k === "y" || (k === "z" && e.shiftKey)) this.undoRedo(true);
 			else if (k === "s") void this.saveNow();
 			else handled = false;
-		} else if (key === "ArrowDown") this.move(1, 0);
-		else if (key === "ArrowUp") this.move(-1, 0);
-		else if (key === "ArrowRight") this.move(0, 1);
-		else if (key === "ArrowLeft") this.move(0, -1);
+		} else if (key === "ArrowDown") this.move(1, 0, e.shiftKey);
+		else if (key === "ArrowUp") this.move(-1, 0, e.shiftKey);
+		else if (key === "ArrowRight") this.move(0, 1, e.shiftKey);
+		else if (key === "ArrowLeft") this.move(0, -1, e.shiftKey);
 		else if (key === "Enter") this.move(e.shiftKey ? -1 : 1, 0);
 		else if (key === "Tab") this.move(0, e.shiftKey ? -1 : 1);
 		else if (key === "F2") this.startEdit();
-		else if (key === "Delete" || key === "Backspace") this.setCell(this.sel, "");
+		else if (key === "Delete" || key === "Backspace") {
+			if (this.rangeA1().includes(":")) this.runCommand("edit.clearContents", {}, true);
+			else this.setCell(this.sel, "");
+		}
 		else if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) this.startEdit(key);
 		else handled = false;
 		if (handled) {
@@ -406,12 +541,29 @@ export class SheetView extends FileView {
 		}
 	}
 
+	/** Copies the selected cells as tab-separated text, as a spreadsheet does. */
 	private onCopy(e: ClipboardEvent) {
-		if (this.editor || !this.selTd) return;
-		const selection = window.getSelection();
-		if (selection && !selection.isCollapsed) return; // copying selected text: let the browser do it
-		e.clipboardData?.setData("text/plain", this.selTd.textContent ?? "");
+		const r = this.rect();
+		const grid = this.grid;
+		if (this.editor || !r || !grid) return;
+		const lines: string[] = [];
+		for (const row of grid.rows) {
+			if (row < r.r0 || row > r.r1) continue;
+			const cells: string[] = [];
+			for (const col of grid.columns) {
+				if (col < r.c0 || col > r.c1) continue;
+				const t = grid.cell(row, col)?.textContent ?? "";
+				cells.push(/[\t\n"]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t);
+			}
+			lines.push(cells.join("\t"));
+		}
+		e.clipboardData?.setData("text/plain", lines.join("\n"));
 		e.preventDefault();
+	}
+
+	private runToggle(key: "bold" | "italic" | "underline", id: string) {
+		const f = this.currentFormat();
+		this.runCommand(id, { on: !(f?.[key] ?? false) }, true);
 	}
 
 	/** Pastes text into the selected cell; tab-separated lines fill a block, as in a spreadsheet. */
@@ -427,7 +579,8 @@ export class SheetView extends FileView {
 			new Notice("That's too much to paste at once (over 10,000 cells).");
 			return;
 		}
-		const start = this.sel;
+		const r = this.rect();
+		const start = r ? { r: r.r0, c: r.c0 } : this.sel;
 		try {
 			grid.forEach((row, i) =>
 				row.forEach((value, j) => {

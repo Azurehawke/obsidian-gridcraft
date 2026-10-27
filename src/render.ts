@@ -14,6 +14,8 @@ export interface RenderCell {
 	rs?: number;
 	/** Inside a merge: no cell of its own. */
 	m?: 1;
+	/** Conditional-format icon: glyph and colour. */
+	ic?: [string, string];
 }
 
 export interface RenderData {
@@ -84,6 +86,11 @@ export class Grid {
 				this.cells.set(`${row.i}:${col}`, td);
 				if (!cell) continue;
 				if (cell.t) td.textContent = cell.t;
+				if (cell.ic) {
+					const icon = createSpan({ cls: "gc-icon", text: cell.ic[0] });
+					icon.style.color = cell.ic[1];
+					td.prepend(icon);
+				}
 				if (cell.s !== undefined) {
 					const css = data.styles[cell.s];
 					if (css) td.style.cssText = css;
