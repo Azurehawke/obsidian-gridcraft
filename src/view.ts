@@ -236,7 +236,7 @@ function statusText(s: EngineStatus): string {
 		case "checking":
 			return "Starting GridCraft…";
 		case "downloading":
-			return "Downloading the GridCraft engine (about 3 MB, one time only)…";
+			return "Downloading the GridCraft engine (about 1.4 MB, one time only)…";
 		case "starting":
 			return "Starting GridCraft…";
 	}

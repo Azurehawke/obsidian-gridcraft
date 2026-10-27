@@ -16,7 +16,7 @@ Works on desktop and mobile Obsidian.
 2. BRAT › Add beta plugin › `Azurehawke/obsidian-gridcraft`.
 3. Enable **GridCraft Viewer** under Community plugins.
 
-The first spreadsheet you open downloads the GridCraft engine (about 3 MB) from this repo's
+The first spreadsheet you open downloads the GridCraft engine (about 1.4 MB) from this repo's
 release of the same version. It's checked against a fingerprint built into the plugin and saved
 in the plugin folder, so sync (Syncthing, Obsidian Sync) carries it to your other devices. Each
 plugin update downloads the matching engine once and removes the old one.
