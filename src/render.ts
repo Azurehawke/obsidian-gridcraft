@@ -34,6 +34,8 @@ export interface GridOptions {
 	headers: boolean;
 	/** Row heights from the workbook (the tab view); notes keep rows compact. */
 	rowHeights: boolean;
+	/** Drag handles on the column and row headers. */
+	resizable?: boolean;
 }
 
 /** A table that more rows can be added to as they arrive. */
@@ -44,6 +46,8 @@ export class Grid {
 	/** Sheet row indexes in the order they're shown. */
 	readonly rows: number[] = [];
 	private cells = new Map<string, HTMLTableCellElement>();
+	private colEls = new Map<number, HTMLTableColElement>();
+	private rowEls = new Map<number, HTMLTableRowElement>();
 
 	constructor(parent: HTMLElement, first: RenderData, private opts: GridOptions) {
 		this.cols = first.cols;
@@ -56,14 +60,20 @@ export class Grid {
 		}
 		for (const c of first.cols) {
 			const w = Math.max(4, c.w);
-			colgroup.createEl("col").style.width = `${w}px`;
+			const col = colgroup.createEl("col");
+			col.style.width = `${w}px`;
+			this.colEls.set(c.i, col);
 			width += w;
 		}
 		this.table.style.width = `${width}px`;
 		if (opts.headers) {
 			const tr = this.table.createEl("thead").createEl("tr");
 			tr.createEl("th", { cls: "gc-corner" });
-			for (const c of first.cols) tr.createEl("th", { cls: "gc-colhead", text: c.l });
+			for (const c of first.cols) {
+				const th = tr.createEl("th", { cls: "gc-colhead", text: c.l });
+				th.dataset.c = String(c.i);
+				if (opts.resizable) th.createDiv({ cls: "gc-col-resize", attr: { "aria-label": "Drag to resize; double-click to fit" } }).dataset.c = String(c.i);
+			}
 		}
 		this.body = this.table.createEl("tbody");
 		this.append(first);
@@ -74,8 +84,13 @@ export class Grid {
 		for (const row of data.rows) {
 			const tr = this.body.createEl("tr");
 			this.rows.push(row.i);
+			this.rowEls.set(row.i, tr);
 			if (this.opts.rowHeights) tr.style.height = `${Math.max(4, row.h)}px`;
-			if (this.opts.headers) tr.createEl("th", { cls: "gc-rowhead", text: String(row.i + 1) });
+			if (this.opts.headers) {
+				const th = tr.createEl("th", { cls: "gc-rowhead", text: String(row.i + 1) });
+				th.dataset.r = String(row.i);
+				if (this.opts.resizable) th.createDiv({ cls: "gc-row-resize", attr: { "aria-label": "Drag to resize; double-click to fit" } }).dataset.r = String(row.i);
+			}
 			for (let k = 0; k < row.c.length; k++) {
 				const cell = row.c[k];
 				if (cell?.m) continue;
@@ -110,6 +125,33 @@ export class Grid {
 
 	get columnCount(): number {
 		return this.cols.length;
+	}
+
+	/** Shown width of sheet column `col` in px. */
+	colWidth(col: number): number {
+		return parseFloat(this.colEls.get(col)?.style.width ?? "") || 0;
+	}
+
+	/** Changes a column's shown width (while dragging); the table grows or shrinks with it. */
+	setColWidth(col: number, px: number) {
+		const el = this.colEls.get(col);
+		if (!el) return;
+		const before = this.colWidth(col);
+		const w = Math.max(4, Math.round(px));
+		el.style.width = `${w}px`;
+		const total = parseFloat(this.table.style.width) || 0;
+		this.table.style.width = `${total + w - before}px`;
+	}
+
+	/** The row's height as the workbook stores it (what a resize starts from). */
+	rowHeight(row: number): number {
+		const tr = this.rowEls.get(row);
+		return parseFloat(tr?.style.height ?? "") || tr?.getBoundingClientRect().height || 0;
+	}
+
+	setRowHeight(row: number, px: number) {
+		const tr = this.rowEls.get(row);
+		if (tr) tr.style.height = `${Math.max(4, Math.round(px))}px`;
 	}
 
 	/** Sheet column indexes in the order they're shown. */

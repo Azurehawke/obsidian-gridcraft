@@ -52,6 +52,8 @@ export interface RibbonHost {
 	format(): CellFormat | null;
 	palette(): Palette | null;
 	tableStyles(): TableStyleInfo[];
+	/** Asks for an exact column width or row height for the selection. */
+	resize(what: "width" | "height"): void;
 }
 
 type Color = string | { theme: number; tint: number };
@@ -202,7 +204,15 @@ export class Ribbon {
 
 		g = this.group();
 		this.button(g, "table", "Format as table", (e) => this.tableGallery(e.currentTarget as HTMLElement));
-		this.button(g, "move-horizontal", "AutoFit column width", () => run("home.autofitColumnWidth"));
+		this.button(g, "ruler", "Column width and row height", (e) => {
+			const m = new Menu();
+			m.addItem((i) => i.setTitle("Column width…").setIcon("move-horizontal").onClick(() => this.host.resize("width")));
+			m.addItem((i) => i.setTitle("AutoFit column width").onClick(() => run("home.autofitColumnWidth")));
+			m.addSeparator();
+			m.addItem((i) => i.setTitle("Row height…").setIcon("move-vertical").onClick(() => this.host.resize("height")));
+			m.addItem((i) => i.setTitle("AutoFit row height").onClick(() => run("home.autofitRowHeight")));
+			m.showAtMouseEvent(e);
+		});
 		this.button(g, "eraser", "Clear formats", () => run("edit.clearFormats"));
 	}
 

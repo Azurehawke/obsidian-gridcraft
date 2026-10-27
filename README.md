@@ -19,6 +19,8 @@ are entered as in GridCraft and the sheet recalculates.
 | Delete, Backspace | clear the cell |
 | Ctrl+Z, Ctrl+Y (Cmd on a Mac) | undo, redo |
 | Shift+arrows, Shift+click, drag | select a range |
+| Drag the edge of a column letter or row number | resize it (all selected columns/rows if it's one of them) |
+| Double-click that edge | AutoFit to the contents |
 | Ctrl+B, Ctrl+I, Ctrl+U | bold, italic, underline |
 | Ctrl+C, Ctrl+V | copy the selected cells; paste text (tab-separated lines fill a block) |
 | Ctrl+S | save now |
@@ -28,7 +30,8 @@ are entered as in GridCraft and the sheet recalculates.
 The toolbar under the formula bar formats the selected cells with GridCraft's own commands:
 bold, italic, underline, strikethrough, font size, font and fill colours (theme colours with
 shades, standard colours, or any colour), borders, alignment, wrap, merge & centre, number
-formats ($, %, decimals, dates), AutoFit column width and Clear formats. **Format as Table**
+formats ($, %, decimals, dates), exact column width and row height or AutoFit (the ruler
+button), and Clear formats. **Format as Table**
 applies one of 60 table styles (light, medium, dark) with banded rows; inside a table the same
 button changes its style and sets total row, banded rows and columns, first and last column.
 The palette button in the bar hides or shows the toolbar.
@@ -90,6 +93,8 @@ plugin update downloads the matching engine once and removes the old one.
 - **0.3**: edit cells in the tab (formula bar, undo/redo, paste), saved automatically.
 - **0.4**: formatting toolbar, Format as Table, range selection; table styles and conditional
   formats drawn in tabs and notes.
+- **0.5**: resize columns and rows by dragging header edges, AutoFit by double-clicking, exact
+  sizes from the toolbar.
 
 ## Building
 

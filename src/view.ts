@@ -2,7 +2,7 @@
 // bottom. Cells are edited through GridCraft's engine (its undo history and recalculation) and
 // the file is saved back to the vault a moment after each change.
 
-import { FileView, Notice, Platform, setIcon, type TFile, type WorkspaceLeaf } from "obsidian";
+import { FileView, Modal, Notice, Platform, Setting, setIcon, type App, type TFile, type WorkspaceLeaf } from "obsidian";
 import { errorText, type Book, type EngineStatus } from "./engine";
 import type GridCraftPlugin from "./main";
 import { colLetters, Grid, type RenderData } from "./render";
@@ -144,6 +144,7 @@ export class SheetView extends FileView {
 			format: () => this.currentFormat(),
 			palette: () => this.parse<Palette>(() => this.book?.palette()),
 			tableStyles: () => this.parse<TableStyleInfo[]>(() => this.book?.tableStyles()) ?? [],
+			resize: (what) => this.askSize(what),
 		});
 		this.ribbon.el.hide();
 
@@ -154,6 +155,7 @@ export class SheetView extends FileView {
 		this.tabsEl = this.contentEl.createDiv({ cls: "gc-tabs" });
 
 		this.registerDomEvent(this.scrollEl, "scroll", () => this.maybeFetchMore());
+		this.registerDomEvent(this.scrollEl, "pointerdown", (e) => this.onResizeStart(e));
 		this.registerDomEvent(this.scrollEl, "mousedown", (e) => this.onMouseDown(e));
 		this.registerDomEvent(this.scrollEl, "mouseover", (e) => this.onMouseOver(e));
 		this.registerDomEvent(this.contentEl.ownerDocument, "mouseup", () => (this.dragging = false));
@@ -305,7 +307,7 @@ export class SheetView extends FileView {
 		try {
 			const first = this.fetch(0, Math.max(BLOCK_ROWS, rowsShown));
 			if (!first) return;
-			this.grid = new Grid(this.scrollEl, first, { headers: true, rowHeights: true });
+			this.grid = new Grid(this.scrollEl, first, { headers: true, rowHeights: true, resizable: true });
 			this.nextRow = first.nextRow;
 			while (this.nextRow !== null && this.grid.rows.length < rowsShown) {
 				const more = this.fetch(this.nextRow, rowsShown - this.grid.rows.length);
@@ -433,6 +435,11 @@ export class SheetView extends FileView {
 	private runCommand(id: string, params: Record<string, unknown>, withRange: boolean) {
 		if (!this.book || !this.sel) return;
 		if (!this.commitEdit()) return;
+		const lines = this.lines();
+		// Column and row commands take whole columns ("B:D") and rows ("2:5"), not a range.
+		if (/^home\.(autofitColumnWidth|columnWidth)$/.test(id) && params.cols === undefined && lines) params = { cols: lines.cols, ...params };
+		if (/^home\.(autofitRowHeight|rowHeight)$/.test(id) && params.rows === undefined && lines) params = { rows: lines.rows, ...params };
+		if (/^home\.(autofit|columnWidth|rowHeight)/.test(id)) withRange = false;
 		const all = withRange ? { range: this.rangeA1(), ...params } : params;
 		try {
 			this.book.run(this.sheet, id, JSON.stringify(all));
@@ -498,7 +505,84 @@ export class SheetView extends FileView {
 		if (p && (p.r !== this.sel?.r || p.c !== this.sel?.c)) this.select(p.r, p.c, false, true);
 	}
 
+	/** The selected columns and rows as "B:D" and "2:5". */
+	private lines(): { cols: string; rows: string } | null {
+		const r = this.rect();
+		if (!r) return null;
+		return { cols: `${colLetters(r.c0)}:${colLetters(r.c1)}`, rows: `${r.r0 + 1}:${r.r1 + 1}` };
+	}
+
+	/**
+	 * Dragging the edge of a column letter or row number resizes it (all the selected columns or
+	 * rows, when it's one of them); double-clicking the edge fits it to its contents.
+	 */
+	private onResizeStart(e: PointerEvent) {
+		const handle = e.target as HTMLElement;
+		const isCol = handle.hasClass?.("gc-col-resize");
+		const isRow = handle.hasClass?.("gc-row-resize");
+		const grid = this.grid;
+		if ((!isCol && !isRow) || !grid || e.button !== 0) return;
+		e.preventDefault();
+		e.stopPropagation();
+		this.commitEdit();
+		const index = Number(isCol ? handle.dataset.c : handle.dataset.r);
+		const start = isCol ? e.clientX : e.clientY;
+		const size0 = isCol ? grid.colWidth(index) : grid.rowHeight(index);
+		let size = size0;
+		handle.addClass("is-dragging");
+		handle.setPointerCapture(e.pointerId);
+		const move = (ev: PointerEvent) => {
+			size = Math.max(isCol ? 8 : 6, size0 + (isCol ? ev.clientX : ev.clientY) - start);
+			if (isCol) grid.setColWidth(index, size);
+			else grid.setRowHeight(index, size);
+		};
+		const up = () => {
+			handle.removeEventListener("pointermove", move);
+			handle.removeEventListener("pointerup", up);
+			handle.removeEventListener("pointercancel", up);
+			handle.removeClass("is-dragging");
+			if (Math.abs(size - size0) < 1) return;
+			const r = this.rect();
+			const inSel = r && (isCol ? index >= r.c0 && index <= r.c1 && r.c1 > r.c0 : index >= r.r0 && index <= r.r1 && r.r1 > r.r0);
+			if (isCol) {
+				const cols = inSel && r ? `${colLetters(r.c0)}:${colLetters(r.c1)}` : `${colLetters(index)}:${colLetters(index)}`;
+				this.runCommand("home.columnWidth", { cols, width: Math.round(size) }, false);
+			} else {
+				const rows = inSel && r ? `${r.r0 + 1}:${r.r1 + 1}` : `${index + 1}:${index + 1}`;
+				this.runCommand("home.rowHeight", { rows, height: Math.round(size) }, false);
+			}
+		};
+		handle.addEventListener("pointermove", move);
+		handle.addEventListener("pointerup", up);
+		handle.addEventListener("pointercancel", up);
+	}
+
+	/** Asks for an exact column width or row height for the selection, then applies it. */
+	private askSize(what: "width" | "height") {
+		const grid = this.grid;
+		const lines = this.lines();
+		const r = this.rect();
+		if (!grid || !lines || !r) return;
+		const current = what === "width" ? grid.colWidth(r.c0) : grid.rowHeight(r.r0);
+		const label = what === "width" ? `Column width for ${lines.cols}` : `Row height for ${lines.rows}`;
+		new SizeModal(this.app, label, Math.round(current), (px) => {
+			if (what === "width") this.runCommand("home.columnWidth", { cols: lines.cols, width: px }, false);
+			else this.runCommand("home.rowHeight", { rows: lines.rows, height: px }, false);
+		}).open();
+	}
+
 	private onDoubleClick(e: MouseEvent) {
+		const handle = e.target as HTMLElement;
+		if (handle.hasClass?.("gc-col-resize") || handle.hasClass?.("gc-row-resize")) {
+			e.preventDefault();
+			const isCol = handle.hasClass("gc-col-resize");
+			const index = Number(isCol ? handle.dataset.c : handle.dataset.r);
+			const r = this.rect();
+			const inSel = r && (isCol ? index >= r.c0 && index <= r.c1 : index >= r.r0 && index <= r.r1);
+			if (isCol) this.runCommand("home.autofitColumnWidth", { cols: inSel && r ? `${colLetters(r.c0)}:${colLetters(r.c1)}` : `${colLetters(index)}:${colLetters(index)}` }, false);
+			else this.runCommand("home.autofitRowHeight", { rows: inSel && r ? `${r.r0 + 1}:${r.r1 + 1}` : `${index + 1}:${index + 1}` }, false);
+			return;
+		}
 		const p = this.cellAt(e.target);
 		if (!p) return;
 		e.preventDefault();
@@ -807,5 +891,50 @@ function statusText(s: EngineStatus): string {
 			return "Downloading the GridCraft engine (about 2.8 MB, one time only)…";
 		case "starting":
 			return "Starting GridCraft…";
+	}
+}
+
+/** Asks for a size in pixels. */
+class SizeModal extends Modal {
+	constructor(
+		app: App,
+		private label: string,
+		private value: number,
+		private onSubmit: (px: number) => void,
+	) {
+		super(app);
+	}
+
+	override onOpen() {
+		this.titleEl.setText(this.label);
+		let value = String(this.value);
+		const submit = () => {
+			const px = Number(value);
+			if (!Number.isFinite(px) || px < 0 || px > 2000) {
+				new Notice("Enter a size from 0 to 2000 pixels.");
+				return;
+			}
+			this.close();
+			this.onSubmit(Math.round(px));
+		};
+		new Setting(this.contentEl)
+			.setName("Pixels")
+			.setDesc("Default column width is 64, default row height is 20.")
+			.addText((t) => {
+				t.setValue(value).onChange((v) => (value = v));
+				t.inputEl.type = "number";
+				t.inputEl.addEventListener("keydown", (e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						submit();
+					}
+				});
+				window.setTimeout(() => t.inputEl.select(), 0);
+			});
+		new Setting(this.contentEl).addButton((b) => b.setButtonText("OK").setCta().onClick(submit));
+	}
+
+	override onClose() {
+		this.contentEl.empty();
 	}
 }
