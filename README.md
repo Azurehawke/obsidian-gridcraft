@@ -1,11 +1,31 @@
 # GridCraft Viewer for Obsidian
 
-Open `.xlsx` and `.csv` files from your vault in an Obsidian tab instead of Excel. Workbooks are
+Open and edit `.xlsx` and `.csv` files from your vault in an Obsidian tab instead of Excel, and show sheets inside notes. Workbooks are
 read with [GridCraft](https://github.com/Azurehawke/gridcraft)'s spreadsheet engine (compiled to
 WebAssembly), so formulas are recalculated and number formats, fonts, fills, borders, merged
 cells and hidden rows and columns show as they do in GridCraft.
 
-Read-only: edit workbooks in GridCraft. Open tabs and tables in notes refresh when the file changes.
+## Editing in the tab
+
+Click a cell to select it and type to replace it, or double-click (or F2) to edit what's there;
+the formula bar above the grid edits the selected cell too. Values, text, dates and `=formulas`
+are entered as in GridCraft and the sheet recalculates.
+
+| Keys | |
+| --- | --- |
+| Arrows, Enter, Tab (Shift to go back) | move |
+| Enter / Tab while editing | enter and move on |
+| Esc | cancel the edit |
+| Delete, Backspace | clear the cell |
+| Ctrl+Z, Ctrl+Y (Cmd on a Mac) | undo, redo |
+| Ctrl+C, Ctrl+V | copy a cell; paste text (tab-separated lines fill a block) |
+| Ctrl+S | save now |
+
+The file is saved a moment after each change ("Saved" in the corner) and when the tab closes.
+Saving rewrites the file with GridCraft's writer, as saving in GridCraft does. A `.csv` keeps
+values only, so a formula's result is saved rather than the formula. Tables inside notes stay
+read-only and refresh after a save; if the file changes on disk (sync, GridCraft), open tabs
+reload it.
 
 Works on desktop and mobile Obsidian.
 
@@ -51,6 +71,7 @@ plugin update downloads the matching engine once and removes the old one.
 - **0.1**: `.xlsx` and `.csv` in a read-only tab, sheet tabs, rows load as you scroll.
 - **0.2**: sheets inside notes (embeds and the `gridcraft` code block), copy a table as
   Markdown or tab-separated text.
+- **0.3**: edit cells in the tab (formula bar, undo/redo, paste), saved automatically.
 
 ## Building
 

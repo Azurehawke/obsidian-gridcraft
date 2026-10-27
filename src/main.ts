@@ -17,6 +17,8 @@ export default class GridCraftPlugin extends Plugin {
 	engine!: EngineLoader;
 	/** Sheet tables currently shown in notes, refreshed when their file changes. */
 	readonly blocks = new Set<SheetBlock>();
+	/** Files a tab just saved, so that tab doesn't reload its own write. */
+	private ownWrites = new Map<string, { view: SheetView; at: number }>();
 
 	override async onload() {
 		this.engine = new EngineLoader(this);
@@ -87,10 +89,18 @@ export default class GridCraftPlugin extends Plugin {
 		}
 	}
 
+	/** Called by a tab right before it writes its file. */
+	noteOwnWrite(path: string, view: SheetView) {
+		this.ownWrites.set(path, { view, at: Date.now() });
+	}
+
 	private refresh(path: string) {
+		const own = this.ownWrites.get(path);
+		const writer = own && Date.now() - own.at < 10_000 ? own.view : null;
+		this.ownWrites.delete(path);
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
 			const view = leaf.view;
-			if (view instanceof SheetView && view.file?.path === path) void view.reload();
+			if (view instanceof SheetView && view.file?.path === path && view !== writer) void view.reload();
 		}
 		for (const block of this.blocks) {
 			if (block.file.path === path) void block.render();

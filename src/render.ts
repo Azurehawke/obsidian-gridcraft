@@ -39,6 +39,9 @@ export class Grid {
 	readonly table: HTMLTableElement;
 	private body: HTMLTableSectionElement;
 	private cols: RenderData["cols"];
+	/** Sheet row indexes in the order they're shown. */
+	readonly rows: number[] = [];
+	private cells = new Map<string, HTMLTableCellElement>();
 
 	constructor(parent: HTMLElement, first: RenderData, private opts: GridOptions) {
 		this.cols = first.cols;
@@ -68,12 +71,17 @@ export class Grid {
 	append(data: RenderData) {
 		for (const row of data.rows) {
 			const tr = this.body.createEl("tr");
+			this.rows.push(row.i);
 			if (this.opts.rowHeights) tr.style.height = `${Math.max(4, row.h)}px`;
 			if (this.opts.headers) tr.createEl("th", { cls: "gc-rowhead", text: String(row.i + 1) });
 			for (let k = 0; k < row.c.length; k++) {
 				const cell = row.c[k];
 				if (cell?.m) continue;
 				const td = tr.createEl("td");
+				const col = data.cols[k]?.i ?? k;
+				td.dataset.r = String(row.i);
+				td.dataset.c = String(col);
+				this.cells.set(`${row.i}:${col}`, td);
 				if (!cell) continue;
 				if (cell.t) td.textContent = cell.t;
 				if (cell.s !== undefined) {
@@ -95,6 +103,16 @@ export class Grid {
 
 	get columnCount(): number {
 		return this.cols.length;
+	}
+
+	/** Sheet column indexes in the order they're shown. */
+	get columns(): number[] {
+		return this.cols.map((c) => c.i);
+	}
+
+	/** The table cell showing sheet cell (row, col), if it has one of its own (not inside a merge). */
+	cell(row: number, col: number): HTMLTableCellElement | undefined {
+		return this.cells.get(`${row}:${col}`);
 	}
 }
 

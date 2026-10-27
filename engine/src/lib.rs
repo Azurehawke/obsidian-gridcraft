@@ -2,7 +2,8 @@
 //!
 //! The plugin hands over a file's bytes ([`Book::open`]), asks which sheets it holds
 //! ([`Book::info`]) and asks for a block of cells as JSON ([`Book::render`]), which it turns
-//! into an HTML table. Everything here is read-only: nothing is ever written back to the file.
+//! into an HTML table. The tab view edits through GridCraft's own commands ([`Book::set_cell`],
+//! undo and redo) and gets the file's new bytes from [`Book::save`]; the plugin writes them.
 //!
 //! Input is hostile (any file in the vault): no panics, sizes are capped, and every lookup
 //! that can miss returns an error the plugin shows in place of the table.
@@ -11,8 +12,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gridcraft_engine::calc::Calc;
 use gridcraft_engine::core::{CellRef, RangeRef, Value, col_to_letters};
+use gridcraft_engine::{DocState, Session, Trust};
 use gridcraft_engine::model::{BorderLine, BorderStyle, Color, Fill, HAlign, PatternType, Style, StyleId, Theme, Underline, VAlign, Visibility, Workbook};
 use serde_json::{Map, Value as Json, json};
 use wasm_bindgen::prelude::*;
@@ -30,11 +31,22 @@ pub fn engine_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// One opened workbook (or CSV file), recalculated as GridCraft does on open.
+/// One opened workbook (or CSV file), recalculated as GridCraft does on open, in a GridCraft
+/// session so edits get its undo history and recalculation.
 #[wasm_bindgen]
 pub struct Book {
-    wb: Workbook,
+    session: Session,
     warnings: Vec<String>,
+}
+
+fn js(e: impl std::fmt::Display) -> JsError {
+    JsError::new(&e.to_string())
+}
+
+impl Book {
+    fn wb(&self) -> Result<&Workbook, JsError> {
+        Ok(&*self.session.doc().map_err(js)?.wb)
+    }
 }
 
 #[wasm_bindgen]
@@ -42,18 +54,18 @@ impl Book {
     /// Opens a file's bytes. `name` (with its extension) decides the format when the bytes
     /// don't: `.xlsx`, `.xlsm`, `.xls`, `.xlsb`, `.ods`, `.csv`, `.tsv`.
     pub fn open(name: &str, bytes: &[u8]) -> Result<Book, JsError> {
-        let (mut wb, warnings) = gridcraft_engine::io::open_bytes(name, bytes).map_err(|e| JsError::new(&e.to_string()))?;
-        let mut calc = Calc::new();
-        calc.recalc_all(&mut wb);
-        Ok(Book { wb, warnings })
+        let (wb, warnings) = gridcraft_engine::io::open_bytes(name, bytes).map_err(js)?;
+        let mut session = Session::new();
+        session.add_document(DocState::new(wb, Some(name.to_string()), name.to_string(), Trust::FromFile));
+        Ok(Book { session, warnings })
     }
 
     /// JSON: `{ sheets: [{ name, hidden, used, lastRow, lastCol }], active, warnings }`.
     /// `used` is the used range in A1 notation (`null` for an empty sheet); `lastRow` and
     /// `lastCol` are 0-based.
     pub fn info(&self) -> String {
-        let sheets: Vec<Json> = self
-            .wb
+        let Ok(wb) = self.wb() else { return json!({ "sheets": [], "active": 0, "warnings": self.warnings }).to_string() };
+        let sheets: Vec<Json> = wb
             .sheets
             .iter()
             .map(|sh| {
@@ -67,14 +79,75 @@ impl Book {
                 })
             })
             .collect();
-        json!({ "sheets": sheets, "active": self.wb.active_sheet, "warnings": self.warnings }).to_string()
+        json!({ "sheets": sheets, "active": wb.active_sheet, "warnings": self.warnings }).to_string()
+    }
+
+    /// What editing a cell starts from: its formula (`=SUM(A1:A9)`), or its value as typed.
+    #[wasm_bindgen(js_name = editText)]
+    pub fn edit_text(&self, sheet: usize, cell: &str) -> Result<String, JsError> {
+        let wb = self.wb()?;
+        let sh = wb.sheet(sheet).ok_or_else(|| JsError::new("This sheet doesn't exist."))?;
+        let c = CellRef::parse(cell).ok_or_else(|| JsError::new(&format!("'{cell}' isn't a cell.")))?;
+        Ok(gridcraft_engine::display::edit_text(wb, sh, c))
+    }
+
+    /// Enters `input` in a cell as if typed: a number, text, date, `TRUE`, or a `=formula`.
+    /// Empty input clears the cell. Recalculates, and records one undo step.
+    #[wasm_bindgen(js_name = setCell)]
+    pub fn set_cell(&mut self, sheet: usize, cell: &str, input: &str) -> Result<(), JsError> {
+        self.session.execute("cell.set", json!({ "sheet": sheet, "cell": cell, "input": input })).map_err(js)?;
+        Ok(())
+    }
+
+    /// Undoes the last edit; false when there was nothing to undo.
+    pub fn undo(&mut self) -> Result<bool, JsError> {
+        if !self.can_undo() {
+            return Ok(false);
+        }
+        self.session.execute("edit.undo", json!({})).map_err(js)?;
+        Ok(true)
+    }
+
+    /// Redoes the last undone edit; false when there was nothing to redo.
+    pub fn redo(&mut self) -> Result<bool, JsError> {
+        if !self.can_redo() {
+            return Ok(false);
+        }
+        self.session.execute("edit.redo", json!({})).map_err(js)?;
+        Ok(true)
+    }
+
+    #[wasm_bindgen(js_name = canUndo)]
+    pub fn can_undo(&self) -> bool {
+        self.session.doc().is_ok_and(|d| !d.undo.is_empty())
+    }
+
+    #[wasm_bindgen(js_name = canRedo)]
+    pub fn can_redo(&self) -> bool {
+        self.session.doc().is_ok_and(|d| !d.redo.is_empty())
+    }
+
+    /// Whether there are edits since opening or the last [`Book::save`].
+    #[wasm_bindgen(js_name = isDirty)]
+    pub fn is_dirty(&self) -> bool {
+        self.session.doc().is_ok_and(DocState::is_dirty)
+    }
+
+    /// The workbook encoded for `name`'s extension (`.xlsx`, `.csv`, ...), as GridCraft saves
+    /// it. The book then counts as saved. A CSV keeps values only, as in GridCraft.
+    pub fn save(&mut self, name: &str) -> Result<Vec<u8>, JsError> {
+        let bytes = gridcraft_engine::io::save_bytes(self.wb()?, name).map_err(js)?;
+        let d = self.session.doc_mut().map_err(js)?;
+        d.saved = d.wb.clone();
+        Ok(bytes)
     }
 
     /// The sheet's index by name (case-insensitive), or -1.
     #[wasm_bindgen(js_name = sheetIndex)]
     pub fn sheet_index(&self, name: &str) -> i32 {
         let want = name.trim().to_lowercase();
-        self.wb.sheets.iter().position(|sh| sh.name.to_lowercase() == want).and_then(|i| i32::try_from(i).ok()).unwrap_or(-1)
+        let Ok(wb) = self.wb() else { return -1 };
+        wb.sheets.iter().position(|sh| sh.name.to_lowercase() == want).and_then(|i| i32::try_from(i).ok()).unwrap_or(-1)
     }
 
     /// A block of cells as JSON, for the plugin's table.
@@ -94,7 +167,8 @@ impl Book {
     ///                                          // (r|c), number-format colour, col/row span
     /// ```
     pub fn render(&self, sheet: usize, range: &str, max_rows: u32, max_cols: u32) -> Result<String, JsError> {
-        let sh = self.wb.sheet(sheet).ok_or_else(|| JsError::new("This sheet doesn't exist."))?;
+        let wb = self.wb()?;
+        let sh = wb.sheet(sheet).ok_or_else(|| JsError::new("This sheet doesn't exist."))?;
         let r = if range.trim().is_empty() {
             let end = sh.used_range().map(|u| u.end).unwrap_or(CellRef::new(0, 0));
             RangeRef::new(CellRef::new(0, 0), end)
@@ -127,7 +201,7 @@ impl Book {
             }
         }
 
-        let theme = &self.wb.theme;
+        let theme = &wb.theme;
         let mut style_index: HashMap<StyleId, usize> = HashMap::new();
         let mut styles: Vec<String> = Vec::new();
         let mut rows_out: Vec<Json> = Vec::with_capacity(vis_rows.len());
@@ -141,11 +215,11 @@ impl Book {
                 let span = anchors.get(&(row, col)).copied();
                 let src = span.map(|(c, _, _)| c).unwrap_or(CellRef::new(row, col));
                 let id = sh.style_id(src);
-                let style = self.wb.styles.get(id);
+                let style = wb.styles.get(id);
                 let value = sh.value(src);
                 let mut cell = Map::new();
                 if !matches!(value, Value::Empty) {
-                    let f = gridcraft_engine::display::format(&value, style.num_fmt.as_str(), &self.wb);
+                    let f = gridcraft_engine::display::format(&value, style.num_fmt.as_str(), wb);
                     cell.insert("t".into(), Json::from(f.text));
                     if style.align.h == HAlign::General {
                         let a = match value {
@@ -346,5 +420,34 @@ mod tests {
         assert_eq!(v["rows"][0]["c"][0]["t"], "Name");
         assert_eq!(v["rows"][1]["c"][1]["a"], "r");
         assert_eq!(v["cols"][1]["l"], "B");
+    }
+
+    fn text_at(book: &Book, range: &str) -> Json {
+        let out = book.render(0, range, 0, 0).unwrap_or_else(|_| std::process::abort());
+        let v: Json = serde_json::from_str(&out).unwrap_or_default();
+        v["rows"][0]["c"][0]["t"].clone()
+    }
+
+    #[test]
+    fn edits_undo_redo_and_save() {
+        let mut book = Book::open("t.csv", b"Name,Qty\nBolts,12\n").unwrap_or_else(|_| std::process::abort());
+        assert!(!book.is_dirty());
+        book.set_cell(0, "C2", "=B2*2").unwrap_or_else(|_| std::process::abort());
+        assert_eq!(text_at(&book, "C2"), "24");
+        assert_eq!(book.edit_text(0, "C2").unwrap_or_default(), "=B2*2");
+        book.set_cell(0, "B2", "20").unwrap_or_else(|_| std::process::abort());
+        assert_eq!(text_at(&book, "C2"), "40");
+        assert!(book.is_dirty() && book.can_undo());
+        assert!(book.undo().unwrap_or(false));
+        assert_eq!(text_at(&book, "C2"), "24");
+        assert!(book.redo().unwrap_or(false));
+        assert_eq!(text_at(&book, "C2"), "40");
+        let bytes = book.save("t.csv").unwrap_or_default();
+        assert!(!book.is_dirty());
+        assert_eq!(String::from_utf8_lossy(&bytes).lines().nth(1), Some("Bolts,20,40"));
+        let xlsx = book.save("t.xlsx").unwrap_or_default();
+        let back = Book::open("t.xlsx", &xlsx).unwrap_or_else(|_| std::process::abort());
+        assert_eq!(text_at(&back, "C2"), "40");
+        assert_eq!(back.edit_text(0, "C2").unwrap_or_default(), "=B2*2");
     }
 }
