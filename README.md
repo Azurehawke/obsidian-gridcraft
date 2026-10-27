@@ -52,15 +52,10 @@ a fingerprint check, and rebuilds on every change.
 
 ## Releasing
 
-Set the version in `manifest.json`, `package.json` and `versions.json`, commit, then tag it
-without a `v`:
-
-```bash
-git tag 0.1.0 && git push origin 0.1.0
-```
-
-The Release workflow builds the engine and plugin and publishes `main.js`, `manifest.json`,
-`styles.css` and `gridcraft-engine.wasm.gz`.
+Set the new version in `manifest.json`, `package.json` and `versions.json`, commit and push to
+`main`. The Release workflow notices a version with no release yet, builds the engine and plugin,
+creates the tag (the bare version, no `v`) and publishes `main.js`, `manifest.json`, `styles.css`
+and `gridcraft-engine.wasm.gz`. BRAT picks the update up from there.
 
 The engine is pinned to a commit of the GridCraft fork in `engine/Cargo.toml` (`rev = …`). Move
 it forward to pick up newer GridCraft code.
