@@ -231,5 +231,5 @@ export function parseCodeBlock(source: string): { path: string; target: SheetTar
 }
 
 function statusText(s: EngineStatus): string {
-	return s === "downloading" ? "Downloading the GridCraft engine (about 1.4 MB, one time only)…" : "Starting GridCraft…";
+	return s === "downloading" ? "Downloading the GridCraft engine (about 2.8 MB, one time only)…" : "Starting GridCraft…";
 }
