@@ -5,10 +5,35 @@ read with [GridCraft](https://github.com/Azurehawke/gridcraft)'s spreadsheet eng
 WebAssembly), so formulas are recalculated and number formats, fonts, fills, borders, merged
 cells and hidden rows and columns show as they do in GridCraft.
 
-Version 0.1 is **read-only**. Edit workbooks in GridCraft; an open tab refreshes when the file
-changes.
+Read-only: edit workbooks in GridCraft. Open tabs and tables in notes refresh when the file changes.
 
 Works on desktop and mobile Obsidian.
+
+## Sheets inside notes
+
+```markdown
+![[Budget.xlsx]]                  the active sheet (first 200 rows)
+![[Budget.xlsx#Summary]]          a sheet by name
+![[Budget.xlsx#Summary!A1:F20]]   a range on that sheet
+![[Budget.xlsx#B2:D9]]            a range on the active sheet
+![[Budget.xlsx#'Q1 Sales'!A1:C9]] quote sheet names with ! or ' in them
+```
+
+Embeds use an Obsidian feature that isn't part of its public plugin API. If an Obsidian update
+breaks them, the code block keeps working:
+
+````markdown
+```gridcraft
+file: Budget.xlsx
+sheet: Summary
+range: A1:F20
+headers: true
+```
+````
+
+`file:` also takes a link (`[[Budget.xlsx#Summary!A1:F20]]`); `headers: true` shows column
+letters and row numbers. The copy button on each table copies it as a Markdown table (first row
+as the header) or as tab-separated text for pasting into a spreadsheet.
 
 ## Install (BRAT)
 
@@ -24,8 +49,8 @@ plugin update downloads the matching engine once and removes the old one.
 ## Roadmap
 
 - **0.1**: `.xlsx` and `.csv` in a read-only tab, sheet tabs, rows load as you scroll.
-- **0.2**: sheets inside notes, `![[Budget.xlsx#Sheet1!A1:D20]]` embeds with a code-block
-  fallback, and copying a table as Markdown or tab-separated text.
+- **0.2**: sheets inside notes (embeds and the `gridcraft` code block), copy a table as
+  Markdown or tab-separated text.
 
 ## Building
 

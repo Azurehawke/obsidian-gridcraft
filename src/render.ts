@@ -30,6 +30,8 @@ export interface RenderData {
 export interface GridOptions {
 	/** Column letters and row numbers around the cells. */
 	headers: boolean;
+	/** Row heights from the workbook (the tab view); notes keep rows compact. */
+	rowHeights: boolean;
 }
 
 /** A table that more rows can be added to as they arrive. */
@@ -40,11 +42,11 @@ export class Grid {
 
 	constructor(parent: HTMLElement, first: RenderData, private opts: GridOptions) {
 		this.cols = first.cols;
-		this.table = parent.createEl("table", { cls: "gc-grid" });
+		this.table = parent.createEl("table", { cls: opts.headers ? "gc-grid" : "gc-grid gc-noheads" });
 		const colgroup = this.table.createEl("colgroup");
 		let width = 0;
 		if (opts.headers) {
-			colgroup.createEl("col", { cls: "gc-rowhead-col" });
+			colgroup.createEl("col", { cls: "gc-rowhead-col" }).style.width = "48px";
 			width += 48;
 		}
 		for (const c of first.cols) {
@@ -66,7 +68,7 @@ export class Grid {
 	append(data: RenderData) {
 		for (const row of data.rows) {
 			const tr = this.body.createEl("tr");
-			tr.style.height = `${Math.max(4, row.h)}px`;
+			if (this.opts.rowHeights) tr.style.height = `${Math.max(4, row.h)}px`;
 			if (this.opts.headers) tr.createEl("th", { cls: "gc-rowhead", text: String(row.i + 1) });
 			for (let k = 0; k < row.c.length; k++) {
 				const cell = row.c[k];
@@ -94,6 +96,31 @@ export class Grid {
 	get columnCount(): number {
 		return this.cols.length;
 	}
+}
+
+/** The cells' text, row by row (cells inside a merge are empty). */
+export function cellTexts(data: RenderData): string[][] {
+	return data.rows.map((row) => row.c.map((c) => (c && !c.m ? (c.t ?? "") : "")));
+}
+
+/** Tab-separated text, as a spreadsheet pastes it. */
+export function toTsv(data: RenderData): string {
+	const quote = (t: string) => (/[\t\n"]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t);
+	return cellTexts(data)
+		.map((r) => r.map(quote).join("\t"))
+		.join("\n");
+}
+
+/** A Markdown table; the first row becomes the header row. */
+export function toMarkdown(data: RenderData): string {
+	const rows = cellTexts(data);
+	if (rows.length === 0) return "";
+	const esc = (t: string) => t.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
+	const line = (r: string[]) => `| ${r.map(esc).join(" | ")} |`;
+	const width = Math.max(...rows.map((r) => r.length));
+	const pad = (r: string[]) => [...r, ...Array<string>(width - r.length).fill("")];
+	const [head, ...rest] = rows.map(pad);
+	return [line(head), `| ${Array<string>(width).fill("---").join(" | ")} |`, ...rest.map(line)].join("\n");
 }
 
 /** Column letters for a 0-based index (0 = A). */

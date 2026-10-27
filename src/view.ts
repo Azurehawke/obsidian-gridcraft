@@ -169,7 +169,7 @@ export class SheetView extends FileView {
 		try {
 			const data = this.fetch(0);
 			if (!data) return;
-			this.grid = new Grid(this.scrollEl, data, { headers: true });
+			this.grid = new Grid(this.scrollEl, data, { headers: true, rowHeights: true });
 			this.nextRow = data.nextRow;
 			if (data.moreCols) {
 				this.setNotice([...(this.info?.warnings ?? []), `Showing the first ${data.cols.length} columns.`]);
