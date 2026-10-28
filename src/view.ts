@@ -26,6 +26,8 @@ const RIBBON_KEY = "gridcraft-viewer-ribbon";
 interface SheetInfo {
 	name: string;
 	hidden: boolean;
+	/** Frozen [rows, columns] at the top and left. */
+	freeze?: [number, number] | null;
 	used: string | null;
 	lastRow: number | null;
 	lastCol: number | null;
@@ -150,6 +152,11 @@ export class SheetView extends FileView {
 			tableStyles: () => this.parse<TableStyleInfo[]>(() => this.book?.tableStyles()) ?? [],
 			resize: (what) => this.askSize(what),
 			insertChart: (type, subtype) => this.insertChart(type, subtype),
+			frozen: () => {
+				const f = this.info?.sheets[this.sheet]?.freeze;
+				return f && (f[0] > 0 || f[1] > 0) ? f : null;
+			},
+			activeCell: () => (this.sel ? this.a1(this.sel) : null),
 		});
 		this.ribbon.el.hide();
 
@@ -322,6 +329,7 @@ export class SheetView extends FileView {
 				this.nextRow = more.nextRow;
 			}
 			if (first.moreCols) this.setNotice([...(this.info.warnings ?? []), `Showing the first ${first.cols.length} columns.`]);
+			this.applyFreeze();
 			this.drawCharts();
 			if (keep) {
 				this.scrollEl.scrollTop = scrollTop;
@@ -491,6 +499,12 @@ export class SheetView extends FileView {
 		return { r: Number(td.dataset.r), c: Number(td.dataset.c) };
 	}
 
+	/** Keeps the sheet's frozen rows and columns in place while the rest scrolls. */
+	private applyFreeze() {
+		const f = this.info?.sheets[this.sheet]?.freeze;
+		this.grid?.freeze(f?.[0] ?? 0, f?.[1] ?? 0);
+	}
+
 	// ----- charts -----
 
 	private chartList(): ChartInfo[] {
@@ -658,6 +672,7 @@ export class SheetView extends FileView {
 			size = Math.max(isCol ? 8 : 6, size0 + (isCol ? ev.clientX : ev.clientY) - start);
 			if (isCol) grid.setColWidth(index, size);
 			else grid.setRowHeight(index, size);
+			this.applyFreeze();
 		};
 		const up = () => {
 			handle.removeEventListener("pointermove", move);

@@ -34,7 +34,10 @@ formats ($, %, decimals, dates), exact column width and row height or AutoFit (t
 button), and Clear formats. **Format as Table**
 applies one of 60 table styles (light, medium, dark) with banded rows; inside a table the same
 button changes its style and sets total row, banded rows and columns, first and last column.
-The palette button in the bar hides or shows the toolbar.
+The snowflake button freezes panes (above and left of the selected cell, the top row, or the
+first column) or unfreezes them. Frozen rows and columns from the workbook stay in place while
+the rest scrolls, as in Excel, and freezing is saved with the file. The palette button in the
+bar hides or shows the toolbar.
 
 ### Charts
 
@@ -112,6 +115,7 @@ plugin update downloads the matching engine once and removes the old one.
 - **0.5**: resize columns and rows by dragging header edges, AutoFit by double-clicking, exact
   sizes from the toolbar.
 - **0.6**: charts shown in tabs and notes; insert, move, resize, restyle and delete charts.
+- **0.7**: frozen panes shown and set (freeze panes, top row, first column, unfreeze).
 
 ## Building
 

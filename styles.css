@@ -652,3 +652,67 @@ input.gc-pal-custom {
 	height: auto;
 	margin: 0 auto;
 }
+
+/* Frozen panes: frozen cells stay put (sticky) and paint over what scrolls under them. Charts sit
+   between the cells and the frozen panes. */
+
+.gc-charts {
+	z-index: auto;
+}
+
+.gc-chart {
+	z-index: 1;
+}
+
+.gc-chart-bar {
+	z-index: 9;
+}
+
+.gc-grid td.gc-frz {
+	position: sticky;
+	background-color: var(--background-primary);
+}
+
+.gc-grid td.gc-frz-c {
+	z-index: 2;
+}
+
+.gc-grid td.gc-frz-r {
+	z-index: 3;
+}
+
+.gc-grid td.gc-frz-r.gc-frz-c {
+	z-index: 4;
+}
+
+.gc-grid th.gc-rowhead {
+	z-index: 3;
+}
+
+.gc-grid th.gc-rowhead.gc-frz-r {
+	z-index: 5;
+}
+
+.gc-grid thead th {
+	z-index: 6;
+}
+
+.gc-grid thead th.gc-frz-c {
+	z-index: 7;
+}
+
+.gc-grid th.gc-corner {
+	z-index: 8;
+}
+
+input.gc-editor {
+	z-index: 10;
+}
+
+.gc-grid .gc-frz-edge-b {
+	border-bottom: 2px solid var(--text-faint) !important;
+}
+
+.gc-grid .gc-frz-edge-r {
+	border-right: 2px solid var(--text-faint) !important;
+}

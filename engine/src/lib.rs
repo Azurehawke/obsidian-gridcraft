@@ -63,7 +63,8 @@ impl Book {
         Ok(Book { session, warnings })
     }
 
-    /// JSON: `{ sheets: [{ name, hidden, used, lastRow, lastCol }], active, warnings }`.
+    /// JSON: `{ sheets: [{ name, hidden, used, lastRow, lastCol, freeze }], active, warnings }`.
+    /// `freeze` is `[rows, cols]` frozen at the top and left, or null.
     /// `used` is the used range in A1 notation (`null` for an empty sheet); `lastRow` and
     /// `lastCol` are 0-based.
     pub fn info(&self) -> String {
@@ -79,6 +80,7 @@ impl Book {
                     "used": used.map(|r| r.to_string()),
                     "lastRow": used.map(|r| r.end.row),
                     "lastCol": used.map(|r| r.end.col),
+                    "freeze": sh.freeze.map(|(r, c)| [r, c]),
                 })
             })
             .collect();
@@ -735,6 +737,21 @@ mod tests {
         let back = Book::open("t.xlsx", &bytes).unwrap_or_else(|_| std::process::abort());
         let list: Json = serde_json::from_str(&back.charts(0)).unwrap_or_default();
         assert_eq!(list.as_array().map(Vec::len), Some(1), "{list}");
+    }
+
+    #[test]
+    fn freeze_panes_show_in_info_and_save() {
+        let mut book = Book::open("t.csv", b"a,b,c\n1,2,3\n4,5,6\n").unwrap_or_else(|_| std::process::abort());
+        book.run(0, "view.freezePanes", r#"{"cell":"B2"}"#).unwrap_or_else(|_| std::process::abort());
+        let info: Json = serde_json::from_str(&book.info()).unwrap_or_default();
+        assert_eq!(info["sheets"][0]["freeze"], json!([1, 1]));
+        let bytes = book.save("t.xlsx").unwrap_or_default();
+        let back = Book::open("t.xlsx", &bytes).unwrap_or_else(|_| std::process::abort());
+        let info: Json = serde_json::from_str(&back.info()).unwrap_or_default();
+        assert_eq!(info["sheets"][0]["freeze"], json!([1, 1]));
+        book.run(0, "view.unfreezePanes", "{}").unwrap_or_else(|_| std::process::abort());
+        let info: Json = serde_json::from_str(&book.info()).unwrap_or_default();
+        assert!(info["sheets"][0]["freeze"].is_null());
     }
 
     #[test]

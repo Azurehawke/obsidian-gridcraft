@@ -57,6 +57,10 @@ export interface RibbonHost {
 	resize(what: "width" | "height"): void;
 	/** Inserts a chart of the selected data. */
 	insertChart(type: string, subtype?: string): void;
+	/** Frozen [rows, columns] of the sheet, or null. */
+	frozen(): [number, number] | null;
+	/** The active cell in A1 notation. */
+	activeCell(): string | null;
 }
 
 type Color = string | { theme: number; tint: number };
@@ -226,6 +230,25 @@ export class Ribbon {
 			m.showAtMouseEvent(e);
 		});
 		this.button(g, "eraser", "Clear formats", () => run("edit.clearFormats"));
+
+		g = this.group();
+		this.button(g, "snowflake", "Freeze panes", (e) => {
+			const frozen = this.host.frozen();
+			const at = this.host.activeCell();
+			const m = new Menu();
+			if (frozen) m.addItem((i) => i.setTitle("Unfreeze panes").setIcon("lock-open").onClick(() => this.host.run("view.unfreezePanes", {}, false)));
+			if (at) {
+				m.addItem((i) =>
+					i
+						.setTitle(`Freeze panes above and left of ${at}`)
+						.setIcon("snowflake")
+						.onClick(() => this.host.run("view.freezePanes", { cell: at }, false)),
+				);
+			}
+			m.addItem((i) => i.setTitle("Freeze top row").onClick(() => this.host.run("view.freezeTopRow", {}, false)));
+			m.addItem((i) => i.setTitle("Freeze first column").onClick(() => this.host.run("view.freezeFirstColumn", {}, false)));
+			m.showAtMouseEvent(e);
+		});
 	}
 
 	/** Shows the selected cell's format on the toggle buttons. */

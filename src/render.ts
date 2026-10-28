@@ -154,6 +154,73 @@ export class Grid {
 		if (tr) tr.style.height = `${Math.max(4, Math.round(px))}px`;
 	}
 
+	/**
+	 * Keeps the first `rows` sheet rows and `cols` sheet columns in place while the rest scrolls
+	 * (frozen panes). Call after the table is in the page; again after sizes change.
+	 */
+	freeze(rows: number, cols: number) {
+		for (const el of Array.from(this.table.querySelectorAll(".gc-frz"))) {
+			const h = el as HTMLElement;
+			h.removeClass("gc-frz", "gc-frz-r", "gc-frz-c", "gc-frz-edge-b", "gc-frz-edge-r");
+			h.style.removeProperty("top");
+			h.style.removeProperty("left");
+		}
+		if (rows <= 0 && cols <= 0) return;
+		const headH = (this.table.querySelector("thead") as HTMLElement | null)?.offsetHeight ?? 0;
+		const left = new Map<number, number>();
+		let x = this.opts.headers ? 48 : 0;
+		let lastCol = -1;
+		for (const c of this.cols) {
+			if (c.i >= cols) break;
+			left.set(c.i, x);
+			x += this.colWidth(c.i);
+			lastCol = c.i;
+		}
+		const top = new Map<number, number>();
+		let y = headH;
+		let lastRow = -1;
+		for (const r of this.rows) {
+			if (r >= rows) break;
+			top.set(r, y);
+			y += this.rowEls.get(r)?.getBoundingClientRect().height ?? 0;
+			lastRow = r;
+		}
+		const mark = (el: HTMLElement, r: number | null, c: number | null) => {
+			const t = r === null ? undefined : top.get(r);
+			const l = c === null ? undefined : left.get(c);
+			if (t === undefined && l === undefined) return;
+			el.addClass("gc-frz");
+			if (t !== undefined) {
+				el.style.top = `${t}px`;
+				el.addClass("gc-frz-r");
+				if (r === lastRow) el.addClass("gc-frz-edge-b");
+			}
+			if (l !== undefined) {
+				el.style.left = `${l}px`;
+				el.addClass("gc-frz-c");
+				if (c === lastCol) el.addClass("gc-frz-edge-r");
+			}
+		};
+		for (const [key, td] of this.cells) {
+			const [r, c] = key.split(":").map(Number);
+			// A merged cell reaching past the frozen edge belongs to the frozen part by its corner.
+			mark(td, r, c);
+		}
+		for (const th of Array.from(this.table.querySelectorAll("th.gc-rowhead"))) {
+			const r = Number((th as HTMLElement).dataset.r);
+			if (top.has(r)) mark(th as HTMLElement, r, null);
+		}
+		for (const th of Array.from(this.table.querySelectorAll("th.gc-colhead"))) {
+			const c = Number((th as HTMLElement).dataset.c);
+			if (left.has(c)) {
+				const el = th as HTMLElement;
+				el.addClass("gc-frz", "gc-frz-c");
+				el.style.left = `${left.get(c)}px`;
+				if (c === lastCol) el.addClass("gc-frz-edge-r");
+			}
+		}
+	}
+
 	/** Sheet column indexes in the order they're shown. */
 	get columns(): number[] {
 		return this.cols.map((c) => c.i);
