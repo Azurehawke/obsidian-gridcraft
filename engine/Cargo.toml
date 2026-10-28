@@ -15,8 +15,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Pinned to a commit of the fork, so a plugin release always rebuilds the same engine.
-# To move to newer GridCraft code, change `rev` and let CI rebuild.
+# To move to newer GridCraft code, change `rev` (on all three lines) and let CI rebuild.
 gridcraft-engine = { git = "https://github.com/Azurehawke/gridcraft", rev = "4eb2fb5c8ed30a580acf24234fffb2cb6256e335" }
+gridcraft-chart = { git = "https://github.com/Azurehawke/gridcraft", rev = "4eb2fb5c8ed30a580acf24234fffb2cb6256e335" }
+gridcraft-pdf = { git = "https://github.com/Azurehawke/gridcraft", rev = "4eb2fb5c8ed30a580acf24234fffb2cb6256e335" }
 serde_json = "1"
 wasm-bindgen = "0.2"
 

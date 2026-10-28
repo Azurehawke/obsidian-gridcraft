@@ -10,6 +10,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod charts;
+
 use std::collections::{HashMap, HashSet};
 
 use gridcraft_engine::core::{CellRef, RangeRef, Value, col_to_letters};
@@ -243,6 +245,56 @@ impl Book {
             })
             .collect();
         Json::Array(list).to_string()
+    }
+
+    /// The charts on a sheet, drawn. JSON: `[{ id, index, name, kind, title, legend, dataLabels,
+    /// gridlines, left, top, width, height, svg }]`. `left`/`top` are in sheet pixels from the
+    /// top-left of A1 (hidden rows and columns take no room); `name` is "Chart 1", "Chart 2", ...
+    /// in sheet order; `svg` is null for a chart too small to draw.
+    pub fn charts(&self, sheet: usize) -> String {
+        let Ok(wb) = self.wb() else { return "[]".into() };
+        let Some(sh) = wb.sheet(sheet) else { return "[]".into() };
+        let list: Vec<Json> = sh
+            .charts
+            .iter()
+            .enumerate()
+            .map(|(i, ch)| {
+                let a = &ch.anchor;
+                json!({
+                    "id": ch.id,
+                    "index": i,
+                    "name": format!("Chart {}", i + 1),
+                    "kind": format!("{:?}", ch.kind),
+                    "title": ch.title,
+                    "legend": format!("{:?}", ch.legend),
+                    "dataLabels": ch.data_labels,
+                    "gridlines": ch.gridlines,
+                    "left": sh.col_left(a.cell.col) + f64::from(a.dx),
+                    "top": sh.row_top(a.cell.row) + f64::from(a.dy),
+                    "width": a.width,
+                    "height": a.height,
+                    "svg": charts::chart_svg(wb, sheet, ch),
+                })
+            })
+            .collect();
+        Json::Array(list).to_string()
+    }
+
+    /// Moves and sizes chart `id` so its top-left corner is at (`left`, `top`) sheet pixels from
+    /// A1 and it is `width` x `height` pixels. One undo step.
+    #[wasm_bindgen(js_name = placeChart)]
+    pub fn place_chart(&mut self, sheet: usize, id: u32, left: f64, top: f64, width: f64, height: f64) -> Result<(), JsError> {
+        let (at, dx, dy) = {
+            let wb = self.wb()?;
+            let sh = wb.sheet(sheet).ok_or_else(|| JsError::new("This sheet doesn't exist."))?;
+            let (left, top) = (if left.is_finite() { left.max(0.0) } else { 0.0 }, if top.is_finite() { top.max(0.0) } else { 0.0 });
+            let (col, row) = (sh.col_at(left), sh.row_at(top));
+            (CellRef::new(row, col).a1(), (left - sh.col_left(col)).max(0.0), (top - sh.row_top(row)).max(0.0))
+        };
+        let size = |v: f64| if v.is_finite() { v.clamp(20.0, 8000.0) } else { 300.0 };
+        let params = json!({ "chart": id, "at": at, "dx": dx, "dy": dy, "width": size(width), "height": size(height) });
+        self.run(sheet, "chart.set", &params.to_string())?;
+        Ok(())
     }
 
     /// A block of cells as JSON, for the plugin's table.
@@ -656,6 +708,33 @@ mod tests {
         assert_eq!(pal["theme"].as_array().map(Vec::len), Some(10));
         let styles: Json = serde_json::from_str(&book.table_styles()).unwrap_or_default();
         assert_eq!(styles.as_array().map(Vec::len), Some(60));
+    }
+
+    #[test]
+    fn charts_insert_draw_and_move() {
+        let mut book = Book::open("t.csv", b"Month,Sales\nJan,10\nFeb,25\nMar,18\n").unwrap_or_else(|_| std::process::abort());
+        book.run(0, "insert.chart", r#"{"range":"A1:B4","type":"column"}"#).unwrap_or_else(|_| std::process::abort());
+        let list: Json = serde_json::from_str(&book.charts(0)).unwrap_or_default();
+        assert_eq!(list.as_array().map(Vec::len), Some(1), "{list}");
+        let ch = &list[0];
+        assert_eq!(ch["name"], "Chart 1");
+        let svg = ch["svg"].as_str().unwrap_or("");
+        assert!(svg.starts_with("<svg") && svg.contains("<rect"), "{svg}");
+        let id = ch["id"].as_u64().unwrap_or(0) as u32;
+        book.place_chart(0, id, 200.0, 50.0, 320.0, 200.0).unwrap_or_else(|_| std::process::abort());
+        let list: Json = serde_json::from_str(&book.charts(0)).unwrap_or_default();
+        assert_eq!(list[0]["width"], 320.0);
+        assert!((list[0]["left"].as_f64().unwrap_or(0.0) - 200.0).abs() < 0.5, "{list}");
+        assert!((list[0]["top"].as_f64().unwrap_or(0.0) - 50.0).abs() < 0.5, "{list}");
+        book.run(0, "chart.set", &format!(r#"{{"chart":{id},"type":"pie","title":"Sales"}}"#)).unwrap_or_else(|_| std::process::abort());
+        let list: Json = serde_json::from_str(&book.charts(0)).unwrap_or_default();
+        assert_eq!(list[0]["kind"], "Pie");
+        assert!(list[0]["svg"].as_str().unwrap_or("").contains("<path"), "{list}");
+        // Charts survive a save as .xlsx.
+        let bytes = book.save("t.xlsx").unwrap_or_default();
+        let back = Book::open("t.xlsx", &bytes).unwrap_or_else(|_| std::process::abort());
+        let list: Json = serde_json::from_str(&back.charts(0)).unwrap_or_default();
+        assert_eq!(list.as_array().map(Vec::len), Some(1), "{list}");
     }
 
     #[test]
