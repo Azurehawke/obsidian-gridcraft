@@ -36,6 +36,16 @@ applies one of 60 table styles (light, medium, dark) with banded rows; inside a 
 button changes its style and sets total row, banded rows and columns, first and last column.
 The palette button in the bar hides or shows the toolbar.
 
+### Charts
+
+Charts in a workbook show over the grid where they sit, drawn by GridCraft's chart engine
+(column, bar, line, pie, doughnut, area, scatter, radar, waterfall, funnel and more), and update
+as you edit their data. To make one, select the data (labels in the first column or row) and
+choose **Insert chart** in the toolbar. Click a chart to select it: drag it to move it, drag the
+corner to resize it, and use the bar above it to change the type, title, legend, data labels,
+gridlines and colours, switch rows and columns, or delete it (Delete also works). Undo covers
+all of it.
+
 Tables, conditional formats (fills, colour scales, data bars, icon sets) and cell colours show
 in the tab and in notes. In dark themes, text on a coloured fill switches to black or white so
 it stays readable.
@@ -56,7 +66,11 @@ Works on desktop and mobile Obsidian.
 ![[Budget.xlsx#Summary!A1:F20]]   a range on that sheet
 ![[Budget.xlsx#B2:D9]]            a range on the active sheet
 ![[Budget.xlsx#'Q1 Sales'!A1:C9]] quote sheet names with ! or ' in them
+![[Budget.xlsx#Chart 1]]          a chart on the active sheet (numbered in sheet order)
+![[Budget.xlsx#Summary!Chart 2]]  a chart on a named sheet
 ```
+
+A whole-sheet embed (no range) shows the sheet's charts over its cells too.
 
 Embeds use an Obsidian feature that isn't part of its public plugin API. If an Obsidian update
 breaks them, the code block keeps working:
@@ -69,6 +83,8 @@ range: A1:F20
 headers: true
 ```
 ````
+
+The code block takes `chart: 2` (or `chart: Chart 2`) to show a chart instead of cells.
 
 `file:` also takes a link (`[[Budget.xlsx#Summary!A1:F20]]`); `headers: true` shows column
 letters and row numbers. The copy button on each table copies it as a Markdown table (first row
@@ -95,6 +111,7 @@ plugin update downloads the matching engine once and removes the old one.
   formats drawn in tabs and notes.
 - **0.5**: resize columns and rows by dragging header edges, AutoFit by double-clicking, exact
   sizes from the toolbar.
+- **0.6**: charts shown in tabs and notes; insert, move, resize, restyle and delete charts.
 
 ## Building
 

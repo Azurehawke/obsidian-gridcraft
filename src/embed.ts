@@ -4,6 +4,7 @@
 import { Component, Keymap, Menu, Notice, setIcon, type TFile } from "obsidian";
 import { errorText, type EngineStatus } from "./engine";
 import type GridCraftPlugin from "./main";
+import { ChartLayer, chartIndex, svgElement, type ChartInfo } from "./charts";
 import { colLetters, Grid, toMarkdown, toTsv, type RenderData } from "./render";
 
 /** Rows shown when no range is given; give a range to show a different block. */
@@ -14,6 +15,8 @@ const EMBED_MAX_ROWS = 2000;
 export interface SheetTarget {
 	sheet?: string;
 	range?: string;
+	/** A chart by name ("Chart 2") instead of cells. */
+	chart?: string;
 	headers?: boolean;
 }
 
@@ -108,17 +111,31 @@ export class SheetBlock extends Component {
 			const book = Book.open(this.file.name, new Uint8Array(bytes));
 			let data: RenderData | null = null;
 			let sheetName = "";
+			let charts: ChartInfo[] = [];
+			let chart: ChartInfo | null = null;
+			// "#Chart 2" or "#Sheet1!Chart 2": a chart rather than cells.
+			let chartName = this.target.chart;
+			let sheetWanted = this.target.sheet;
+			let rangeWanted = this.target.range;
+			if (!chartName && chartIndex(rangeWanted) >= 0) {
+				chartName = rangeWanted;
+				rangeWanted = undefined;
+			}
+			if (!chartName && sheetWanted && !rangeWanted && chartIndex(sheetWanted) >= 0 && book.sheetIndex(sheetWanted) < 0) {
+				chartName = sheetWanted;
+				sheetWanted = undefined;
+			}
 			try {
 				const info = JSON.parse(book.info()) as {
 					sheets: { name: string; hidden: boolean; lastRow: number | null; lastCol: number | null }[];
 					active: number;
 				};
 				let index: number;
-				if (this.target.sheet) {
-					index = book.sheetIndex(this.target.sheet);
+				if (sheetWanted) {
+					index = book.sheetIndex(sheetWanted);
 					if (index < 0) {
 						const names = info.sheets.filter((s) => !s.hidden).map((s) => s.name);
-						throw new Error(`There's no sheet named "${this.target.sheet}". Sheets: ${names.join(", ")}.`);
+						throw new Error(`There's no sheet named "${sheetWanted}". Sheets: ${names.join(", ")}.`);
 					}
 				} else {
 					const active = info.sheets[info.active];
@@ -126,28 +143,58 @@ export class SheetBlock extends Component {
 				}
 				const sheet = info.sheets[index];
 				sheetName = sheet?.name ?? "";
-				let range = this.target.range;
-				if (!range && sheet && sheet.lastRow !== null && sheet.lastCol !== null) {
-					range = `A1:${colLetters(sheet.lastCol)}${sheet.lastRow + 1}`;
-				}
-				if (range) {
-					const limit = this.target.range ? EMBED_MAX_ROWS : EMBED_ROWS;
-					data = JSON.parse(book.render(index, range, limit, 0)) as RenderData;
+				charts = JSON.parse(book.charts(index)) as ChartInfo[];
+				if (chartName) {
+					const k = chartIndex(chartName);
+					chart = charts[k] ?? null;
+					if (!chart) {
+						throw new Error(
+							charts.length ? `There's no ${chartName} on ${sheetName}; it has ${charts.length} chart${charts.length > 1 ? "s" : ""}.` : `${sheetName} has no charts.`,
+						);
+					}
+				} else {
+					let range = rangeWanted;
+					if (!range && sheet && sheet.lastRow !== null && sheet.lastCol !== null) {
+						range = `A1:${colLetters(sheet.lastCol)}${sheet.lastRow + 1}`;
+					}
+					if (range) {
+						const limit = rangeWanted ? EMBED_MAX_ROWS : EMBED_ROWS;
+						data = JSON.parse(book.render(index, range, limit, 0)) as RenderData;
+					}
 				}
 			} finally {
 				book.free();
 			}
 			if (token !== this.token) return;
 
-			const multi = this.target.sheet || this.target.range;
-			where.setText(multi ? [sheetName, this.target.range?.toUpperCase()].filter(Boolean).join(" › ") : sheetName);
 			this.data = data;
 			body.empty();
-			if (!data || data.rows.length === 0) {
+			if (chart) {
+				where.setText([sheetName, chart.name, chart.title].filter(Boolean).join(" › "));
+				copy.hide();
+				const box = body.createDiv({ cls: "gc-embed-chart" });
+				const svg = chart.svg ? svgElement(el.ownerDocument, chart.svg) : null;
+				if (svg) box.appendChild(svg);
+				else say(`${chart.name} is too small to draw.`);
+				return;
+			}
+			copy.show();
+			const multi = sheetWanted || rangeWanted;
+			where.setText(multi ? [sheetName, rangeWanted?.toUpperCase()].filter(Boolean).join(" › ") : sheetName);
+			// The whole sheet shows its charts too, over the cells where they sit.
+			const overlay = !rangeWanted && charts.length > 0;
+			if ((!data || data.rows.length === 0) && !overlay) {
 				say("This sheet is empty.");
 				return;
 			}
-			new Grid(body, data, { headers: this.target.headers ?? false, rowHeights: false });
+			const headers = this.target.headers ?? false;
+			const grid = data && data.rows.length > 0 ? new Grid(body, data, { headers, rowHeights: overlay }) : null;
+			if (overlay) {
+				const head = grid?.table.querySelector("thead") as HTMLElement | null;
+				const origin = { left: (grid?.table.offsetLeft ?? 0) + (headers ? 48 : 0), top: (grid?.table.offsetTop ?? 0) + (head?.offsetHeight ?? 0) };
+				new ChartLayer(body, origin, charts, { interactive: false });
+			}
+			if (!data) return;
 			const notes: string[] = [];
 			if (data.nextRow !== null) notes.push(`Showing the first ${data.rows.length} rows. Open the file to see the rest, or link a range such as #${sheetName}!A1:F50.`);
 			if (data.moreCols) notes.push(`Showing the first ${data.cols.length} columns.`);
@@ -217,6 +264,7 @@ export function parseCodeBlock(source: string): { path: string; target: SheetTar
 		else if (key === "sheet") target.sheet = value.replace(/^["'](.*)["']$/, "$1");
 		else if (key === "range") target.range = value;
 		else if (key === "headers") target.headers = /^(true|yes|on|1)$/i.test(value);
+		else if (key === "chart") target.chart = /^\d+$/.test(value) ? `Chart ${value}` : value;
 	}
 	// [[Budget.xlsx#Sheet1!A1:D20]] or [[Budget.xlsx|alias]]
 	path = path.replace(/^!?\[\[(.*)\]\]$/, "$1").split("|")[0].trim();

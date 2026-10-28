@@ -2,6 +2,7 @@
 // Format as Table. Every button runs a GridCraft command on the selected range.
 
 import { Menu, setIcon } from "obsidian";
+import { CHART_TYPES } from "./charts";
 
 export interface TableInfo {
 	name: string;
@@ -54,6 +55,8 @@ export interface RibbonHost {
 	tableStyles(): TableStyleInfo[];
 	/** Asks for an exact column width or row height for the selection. */
 	resize(what: "width" | "height"): void;
+	/** Inserts a chart of the selected data. */
+	insertChart(type: string, subtype?: string): void;
 }
 
 type Color = string | { theme: number; tint: number };
@@ -113,7 +116,11 @@ export class Ribbon {
 	private button(parent: HTMLElement, icon: string, label: string, onClick: (e: MouseEvent) => void, text?: string): HTMLElement {
 		const b = parent.createDiv({ cls: "clickable-icon gc-rb", attr: { "aria-label": label } });
 		if (text) b.createSpan({ cls: "gc-rb-text", text });
-		else setIcon(b, icon);
+		else {
+			setIcon(b, icon);
+			// An icon this Obsidian doesn't have: show the label's first word instead.
+			if (!b.querySelector("svg")) b.createSpan({ cls: "gc-rb-text", text: label.split(" ")[0] });
+		}
 		b.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus (and the selection) in the grid
 		b.addEventListener("click", (e) => onClick(e));
 		return b;
@@ -204,6 +211,11 @@ export class Ribbon {
 
 		g = this.group();
 		this.button(g, "table", "Format as table", (e) => this.tableGallery(e.currentTarget as HTMLElement));
+		this.button(g, "bar-chart-2", "Insert chart", (e) => {
+			const m = new Menu();
+			for (const [title, type, subtype] of CHART_TYPES) m.addItem((i) => i.setTitle(title).onClick(() => this.host.insertChart(type, subtype)));
+			m.showAtMouseEvent(e);
+		});
 		this.button(g, "ruler", "Column width and row height", (e) => {
 			const m = new Menu();
 			m.addItem((i) => i.setTitle("Column width…").setIcon("move-horizontal").onClick(() => this.host.resize("width")));

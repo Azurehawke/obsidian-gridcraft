@@ -1,7 +1,7 @@
 {
 	"id": "gridcraft-viewer",
 	"name": "GridCraft Viewer",
-	"version": "0.5.0",
+	"version": "0.6.0",
 	"minAppVersion": "1.5.0",
 	"description": "Open and edit .xlsx and .csv files in a tab, and show sheets inside notes, using GridCraft's spreadsheet engine.",
 	"author": "Azurehawke",

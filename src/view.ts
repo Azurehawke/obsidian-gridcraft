@@ -2,9 +2,10 @@
 // bottom. Cells are edited through GridCraft's engine (its undo history and recalculation) and
 // the file is saved back to the vault a moment after each change.
 
-import { FileView, Modal, Notice, Platform, Setting, setIcon, type App, type TFile, type WorkspaceLeaf } from "obsidian";
+import { FileView, Menu, Modal, Notice, Platform, Setting, setIcon, type App, type TFile, type WorkspaceLeaf } from "obsidian";
 import { errorText, type Book, type EngineStatus } from "./engine";
 import type GridCraftPlugin from "./main";
+import { CHART_TYPES, ChartLayer, type ChartInfo } from "./charts";
 import { colLetters, Grid, type RenderData } from "./render";
 import { Ribbon, type CellFormat, type Palette, type TableStyleInfo } from "./ribbon";
 
@@ -57,6 +58,9 @@ export class SheetView extends FileView {
 	private anchor: Pos | null = null;
 	private selTd: HTMLElement | null = null;
 	private inRange: HTMLElement[] = [];
+	private chartLayer: ChartLayer | null = null;
+	/** The selected chart's id, kept across redraws. */
+	private chartSel: number | null = null;
 	private dragging = false;
 	private ribbon!: Ribbon;
 	private ribbonBtn!: HTMLElement;
@@ -145,6 +149,7 @@ export class SheetView extends FileView {
 			palette: () => this.parse<Palette>(() => this.book?.palette()),
 			tableStyles: () => this.parse<TableStyleInfo[]>(() => this.book?.tableStyles()) ?? [],
 			resize: (what) => this.askSize(what),
+			insertChart: (type, subtype) => this.insertChart(type, subtype),
 		});
 		this.ribbon.el.hide();
 
@@ -303,6 +308,7 @@ export class SheetView extends FileView {
 		this.nextRow = null;
 		this.selTd = null;
 		this.inRange = [];
+		this.chartLayer = null;
 		this.setNotice(this.info.warnings ?? []);
 		try {
 			const first = this.fetch(0, Math.max(BLOCK_ROWS, rowsShown));
@@ -316,6 +322,7 @@ export class SheetView extends FileView {
 				this.nextRow = more.nextRow;
 			}
 			if (first.moreCols) this.setNotice([...(this.info.warnings ?? []), `Showing the first ${first.cols.length} columns.`]);
+			this.drawCharts();
 			if (keep) {
 				this.scrollEl.scrollTop = scrollTop;
 				this.scrollEl.scrollLeft = scrollLeft;
@@ -484,12 +491,128 @@ export class SheetView extends FileView {
 		return { r: Number(td.dataset.r), c: Number(td.dataset.c) };
 	}
 
+	// ----- charts -----
+
+	private chartList(): ChartInfo[] {
+		return this.parse<ChartInfo[]>(() => this.book?.charts(this.sheet)) ?? [];
+	}
+
+	/** Draws the sheet's charts over the grid, where they sit in the workbook. */
+	private drawCharts() {
+		const grid = this.grid;
+		if (!grid) return;
+		const charts = this.chartList();
+		if (charts.length === 0) {
+			this.chartSel = null;
+			return;
+		}
+		const head = grid.table.querySelector("thead") as HTMLElement | null;
+		const origin = { left: grid.table.offsetLeft + 48, top: grid.table.offsetTop + (head?.offsetHeight ?? 0) };
+		this.chartLayer = new ChartLayer(this.scrollEl, origin, charts, {
+			interactive: true,
+			onPlace: (id, left, top, width, height) => {
+				if (!this.book) return;
+				try {
+					this.book.placeChart(this.sheet, id, left, top, width, height);
+				} catch (e) {
+					new Notice(`GridCraft couldn't move the chart: ${errorText(e)}`);
+				}
+				this.afterEdit();
+			},
+			onSelect: (chart) => {
+				this.chartSel = chart?.id ?? null;
+				if (chart) {
+					this.commitEdit();
+					this.nameEl.setText(chart.name);
+					this.scrollEl.focus({ preventScroll: true });
+				} else if (this.sel) {
+					this.nameEl.setText(this.rangeA1());
+				}
+			},
+			toolbar: (bar, chart) => this.chartToolbar(bar, chart),
+		});
+		if (this.chartSel !== null) this.chartLayer.select(this.chartSel);
+	}
+
+	private chartCommand(id: string, params: Record<string, unknown>) {
+		this.runCommand(id, params, false);
+	}
+
+	/** The small toolbar above a selected chart: type, title, legend, labels, gridlines, colours, delete. */
+	private chartToolbar(bar: HTMLElement, chart: ChartInfo) {
+		const button = (icon: string, label: string, onClick: (e: MouseEvent) => void, active = false) => {
+			const b = bar.createDiv({ cls: "clickable-icon gc-rb", attr: { "aria-label": label } });
+			setIcon(b, icon);
+			if (!b.querySelector("svg")) b.createSpan({ cls: "gc-rb-text", text: label.split(" ")[0] });
+			b.toggleClass("is-active", active);
+			b.addEventListener("pointerdown", (e) => e.stopPropagation());
+			b.addEventListener("mousedown", (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+			});
+			b.addEventListener("click", (e) => {
+				e.stopPropagation();
+				onClick(e);
+			});
+			return b;
+		};
+		const set = (params: Record<string, unknown>) => this.chartCommand("chart.set", { chart: chart.id, ...params });
+		button("bar-chart-2", "Chart type", (e) => {
+			const m = new Menu();
+			for (const [title, type, subtype] of CHART_TYPES) m.addItem((i) => i.setTitle(title).onClick(() => set(subtype ? { type, subtype } : { type })));
+			m.showAtMouseEvent(e);
+		});
+		button("heading", "Chart title", () => {
+			new PromptModal(this.app, "Chart title", "Title", "Leave empty for no title.", chart.title ?? "", "text", (title) => set({ title })).open();
+		});
+		button("list", "Legend", (e) => {
+			const m = new Menu();
+			for (const [title, legend] of [["None", "none"], ["Bottom", "bottom"], ["Top", "top"], ["Left", "left"], ["Right", "right"]]) {
+				m.addItem((i) => i.setTitle(title).setChecked(chart.legend.toLowerCase() === legend).onClick(() => set({ legend })));
+			}
+			m.showAtMouseEvent(e);
+		});
+		button("tag", "Data labels", () => set({ dataLabels: !chart.dataLabels }), chart.dataLabels);
+		button("grid", "Gridlines", () => set({ gridlines: !chart.gridlines }), chart.gridlines);
+		button("palette", "Chart colours", (e) => {
+			const m = new Menu();
+			m.addItem((i) => i.setTitle("Colourful").onClick(() => this.chartCommand("chart.changeColors", { chart: chart.id, palette: "colorful" })));
+			m.addItem((i) => i.setTitle("Monochrome").onClick(() => this.chartCommand("chart.changeColors", { chart: chart.id, palette: "monochrome" })));
+			for (let k = 1; k <= 6; k++) {
+				m.addItem((i) => i.setTitle(`Shades of accent ${k}`).onClick(() => this.chartCommand("chart.changeColors", { chart: chart.id, palette: `accent${k}` })));
+			}
+			m.showAtMouseEvent(e);
+		});
+		button("arrow-left-right", "Switch rows and columns", () => this.chartCommand("chart.switchRowColumn", { chart: chart.id }));
+		button("trash-2", "Delete chart", () => this.deleteChart(chart.id));
+	}
+
+	private deleteChart(id: number) {
+		this.chartSel = null;
+		this.chartCommand("chart.delete", { chart: id });
+	}
+
+	/** Inserts a chart of the selected data, then selects it. */
+	private insertChart(type: string, subtype?: string) {
+		if (!this.book) return;
+		const before = new Set(this.chartList().map((c) => c.id));
+		this.runCommand("insert.chart", subtype ? { type, subtype } : { type }, true);
+		const added = this.chartList().find((c) => !before.has(c.id));
+		if (added) {
+			this.chartSel = added.id;
+			this.chartLayer?.select(added.id);
+			const box = this.scrollEl.querySelector(`.gc-chart[data-id="${added.id}"]`);
+			box?.scrollIntoView({ block: "nearest", inline: "nearest" });
+		}
+	}
+
 	private onMouseDown(e: MouseEvent) {
 		if (e.target === this.editor || e.button !== 0) return;
 		const p = this.cellAt(e.target);
 		if (!p) return;
 		// Dragging selects cells (as in a spreadsheet), not text; Ctrl+C copies the cells.
 		e.preventDefault();
+		this.chartLayer?.select(null);
 		this.commitEdit();
 		this.select(p.r, p.c, false, e.shiftKey);
 		this.dragging = true;
@@ -565,9 +688,14 @@ export class SheetView extends FileView {
 		if (!grid || !lines || !r) return;
 		const current = what === "width" ? grid.colWidth(r.c0) : grid.rowHeight(r.r0);
 		const label = what === "width" ? `Column width for ${lines.cols}` : `Row height for ${lines.rows}`;
-		new SizeModal(this.app, label, Math.round(current), (px) => {
-			if (what === "width") this.runCommand("home.columnWidth", { cols: lines.cols, width: px }, false);
-			else this.runCommand("home.rowHeight", { rows: lines.rows, height: px }, false);
+		new PromptModal(this.app, label, "Pixels", "Default column width is 64, default row height is 20.", String(Math.round(current)), "number", (text) => {
+			const px = Number(text);
+			if (!Number.isFinite(px) || px < 0 || px > 2000) {
+				new Notice("Enter a size from 0 to 2000 pixels.");
+				return;
+			}
+			if (what === "width") this.runCommand("home.columnWidth", { cols: lines.cols, width: Math.round(px) }, false);
+			else this.runCommand("home.rowHeight", { rows: lines.rows, height: Math.round(px) }, false);
 		}).open();
 	}
 
@@ -594,6 +722,18 @@ export class SheetView extends FileView {
 
 	private onGridKey(e: KeyboardEvent) {
 		if (this.editor || !this.sel || !this.book) return;
+		const chart = this.chartLayer?.selected;
+		if (chart) {
+			const mod = Platform.isMacOS ? e.metaKey : e.ctrlKey;
+			if (e.key === "Delete" || e.key === "Backspace") this.deleteChart(chart.id);
+			else if (e.key === "Escape") this.chartLayer?.select(null);
+			else if (mod && e.key.toLowerCase() === "z") this.undoRedo(e.shiftKey);
+			else if (mod && e.key.toLowerCase() === "y") this.undoRedo(true);
+			else return;
+			e.preventDefault();
+			e.stopPropagation();
+			return;
+		}
 		const mod = Platform.isMacOS ? e.metaKey : e.ctrlKey;
 		const key = e.key;
 		let handled = true;
@@ -894,35 +1034,33 @@ function statusText(s: EngineStatus): string {
 	}
 }
 
-/** Asks for a size in pixels. */
-class SizeModal extends Modal {
+/** Asks for one value (a size, a title). */
+class PromptModal extends Modal {
 	constructor(
 		app: App,
-		private label: string,
-		private value: number,
-		private onSubmit: (px: number) => void,
+		private heading: string,
+		private name: string,
+		private desc: string,
+		private value: string,
+		private type: "number" | "text",
+		private onSubmit: (value: string) => void,
 	) {
 		super(app);
 	}
 
 	override onOpen() {
-		this.titleEl.setText(this.label);
-		let value = String(this.value);
+		this.titleEl.setText(this.heading);
+		let value = this.value;
 		const submit = () => {
-			const px = Number(value);
-			if (!Number.isFinite(px) || px < 0 || px > 2000) {
-				new Notice("Enter a size from 0 to 2000 pixels.");
-				return;
-			}
 			this.close();
-			this.onSubmit(Math.round(px));
+			this.onSubmit(value.trim());
 		};
 		new Setting(this.contentEl)
-			.setName("Pixels")
-			.setDesc("Default column width is 64, default row height is 20.")
+			.setName(this.name)
+			.setDesc(this.desc)
 			.addText((t) => {
 				t.setValue(value).onChange((v) => (value = v));
-				t.inputEl.type = "number";
+				t.inputEl.type = this.type;
 				t.inputEl.addEventListener("keydown", (e) => {
 					if (e.key === "Enter") {
 						e.preventDefault();
