@@ -745,7 +745,8 @@ mod tests {
     fn charts_draw_data_from_another_sheet() {
         let mut book = Book::open("t.csv", b"Month,Sales\nJan,10\nFeb,25\nMar,18\n").unwrap_or_else(|_| std::process::abort());
         book.run(0, "sheet.rename", r#"{"name":"Dashboard"}"#).unwrap_or_else(|_| std::process::abort());
-        book.run(0, "home.insertSheet", "{}").unwrap_or_else(|_| std::process::abort());
+        // Excel inserts before the active sheet; `before: 1` puts the new sheet after Dashboard.
+        book.run(0, "home.insertSheet", r#"{"before":1}"#).unwrap_or_else(|_| std::process::abort());
         book.run(1, "sheet.rename", r#"{"name":"Data"}"#).unwrap_or_else(|_| std::process::abort());
         book.run(1, "range.setValues", r#"{"range":"A1:B4","values":[["Month","Sales"],["Jan",10],["Feb",25],["Mar",18]]}"#)
             .unwrap_or_else(|_| std::process::abort());
