@@ -739,6 +739,45 @@ mod tests {
         assert_eq!(list.as_array().map(Vec::len), Some(1), "{list}");
     }
 
+    /// What the plugin's "From another sheet" and "Select data" do: a chart on one sheet plots
+    /// data on another, and stays live as that data changes.
+    #[test]
+    fn charts_draw_data_from_another_sheet() {
+        let mut book = Book::open("t.csv", b"Month,Sales\nJan,10\nFeb,25\nMar,18\n").unwrap_or_else(|_| std::process::abort());
+        book.run(0, "sheet.rename", r#"{"name":"Dashboard"}"#).unwrap_or_else(|_| std::process::abort());
+        book.run(0, "home.insertSheet", "{}").unwrap_or_else(|_| std::process::abort());
+        book.run(1, "sheet.rename", r#"{"name":"Data"}"#).unwrap_or_else(|_| std::process::abort());
+        book.run(1, "range.setValues", r#"{"range":"A1:B4","values":[["Month","Sales"],["Jan",10],["Feb",25],["Mar",18]]}"#)
+            .unwrap_or_else(|_| std::process::abort());
+        // Built on the data's sheet, then moved to the dashboard.
+        let made: Json = serde_json::from_str(&book.run(1, "insert.chart", r#"{"range":"A1:B4","type":"column"}"#).unwrap_or_default()).unwrap_or_default();
+        let id = made["chart"].as_u64().unwrap_or(0) as u32;
+        book.run(1, "chart.move", &format!(r#"{{"chart":{id},"sheet":"Dashboard","at":"D2"}}"#)).unwrap_or_else(|_| std::process::abort());
+        let on_dash: Json = serde_json::from_str(&book.charts(0)).unwrap_or_default();
+        assert_eq!(on_dash.as_array().map(Vec::len), Some(1), "{on_dash}");
+        assert_eq!(on_dash[0]["left"].as_f64().map(|v| v > 0.0), Some(true), "{on_dash}");
+        let before = on_dash[0]["svg"].as_str().unwrap_or("").to_string();
+        assert!(before.contains("<rect"), "{before}");
+        let data: Json = serde_json::from_str(&book.charts(1)).unwrap_or_default();
+        assert_eq!(data.as_array().map(Vec::len), Some(0), "{data}");
+        // Editing the data sheet changes the dashboard's chart.
+        book.run(1, "cell.set", r#"{"cell":"B3","input":"50"}"#).unwrap_or_else(|_| std::process::abort());
+        let after: Json = serde_json::from_str(&book.charts(0)).unwrap_or_default();
+        assert_ne!(after[0]["svg"].as_str().unwrap_or(""), before);
+
+        // A chart already on the dashboard can be pointed at the data sheet with chart.selectData.
+        book.run(0, "insert.chart", r#"{"range":"A1:B4","type":"column"}"#).unwrap_or_else(|_| std::process::abort());
+        let own: Json = serde_json::from_str(&book.charts(0)).unwrap_or_default();
+        let own_id = own.as_array().and_then(|v| v.last()).map(|c| c["id"].as_u64().unwrap_or(0) as u32).unwrap_or(0);
+        let own_svg = own.as_array().and_then(|v| v.last()).and_then(|c| c["svg"].as_str()).unwrap_or("").to_string();
+        book.run(0, "chart.selectData", &format!(r#"{{"chart":{own_id},"range":"'Data'!A1:B4"}}"#)).unwrap_or_else(|_| std::process::abort());
+        let repointed: Json = serde_json::from_str(&book.charts(0)).unwrap_or_default();
+        let new_svg = repointed.as_array().and_then(|v| v.last()).and_then(|c| c["svg"].as_str()).unwrap_or("").to_string();
+        assert_ne!(new_svg, own_svg, "{repointed}");
+        // A sheet that doesn't exist is an error, not a crash.
+        assert!(book.run(0, "chart.selectData", &format!(r#"{{"chart":{own_id},"range":"Nope!A1:B4"}}"#)).is_err());
+    }
+
     #[test]
     fn freeze_panes_show_in_info_and_save() {
         let mut book = Book::open("t.csv", b"a,b,c\n1,2,3\n4,5,6\n").unwrap_or_else(|_| std::process::abort());

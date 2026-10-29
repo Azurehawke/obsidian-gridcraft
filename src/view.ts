@@ -18,6 +18,16 @@ const BLOCK_ROWS = 500;
 const PAD_ROWS = 50;
 const PAD_COLS = 6;
 const MAX_ROW = 1_048_575;
+
+/** "Data!A1:D9", "'Q1 Sales'!A1:C9" or "A1:D9" (this sheet): the sheet's name (null for this sheet) and the range. */
+export function splitSource(text: string): { sheet: string | null; range: string } {
+	const t = text.trim().replace(/^=/, "");
+	const bang = t.lastIndexOf("!");
+	if (bang < 0) return { sheet: null, range: t };
+	let sheet = t.slice(0, bang).trim();
+	if (sheet.length >= 2 && sheet.startsWith("'") && sheet.endsWith("'")) sheet = sheet.slice(1, -1).replace(/''/g, "'");
+	return { sheet, range: t.slice(bang + 1).trim() };
+}
 const MAX_COL = 16_383;
 /** Saved this long after the last edit. */
 const SAVE_DELAY_MS = 1200;
@@ -152,6 +162,7 @@ export class SheetView extends FileView {
 			tableStyles: () => this.parse<TableStyleInfo[]>(() => this.book?.tableStyles()) ?? [],
 			resize: (what) => this.askSize(what),
 			insertChart: (type, subtype) => this.insertChart(type, subtype),
+				insertChartFrom: () => this.askChartSource(),
 			frozen: () => {
 				const f = this.info?.sheets[this.sheet]?.freeze;
 				return f && (f[0] > 0 || f[1] > 0) ? f : null;
@@ -598,7 +609,72 @@ export class SheetView extends FileView {
 			m.showAtMouseEvent(e);
 		});
 		button("arrow-left-right", "Switch rows and columns", () => this.chartCommand("chart.switchRowColumn", { chart: chart.id }));
+		button("database", "Select data", () => this.askChartData(chart.id));
 		button("trash-2", "Delete chart", () => this.deleteChart(chart.id));
+	}
+
+	/** Asks for the cells a chart plots (on any sheet), then redraws the chart from them. */
+	private askChartData(id: number) {
+		new PromptModal(
+			this.app,
+			"Chart data",
+			"Data range",
+			"A range on any sheet, such as Data!A1:D20. Quote a sheet name with spaces: 'Q1 Sales'!A1:C9.",
+			"",
+			"text",
+			(text) => {
+				if (text) this.chartCommand("chart.selectData", { chart: id, range: text });
+			},
+		).open();
+	}
+
+	/** Asks for a range on any sheet; the chart it makes is placed here, as a column chart. */
+	private askChartSource() {
+		if (!this.book) return;
+		new PromptModal(
+			this.app,
+			"Chart from another sheet",
+			"Data range",
+			"A range on any sheet, such as Data!A1:D20. The chart starts as a column chart; change its type from the chart bar.",
+			"",
+			"text",
+			(text) => {
+				if (text) this.insertChartFrom(text);
+			},
+		).open();
+	}
+
+	/**
+	 * Inserts a chart whose data is on `source`'s sheet. The engine names a chart's series after the
+	 * sheet it's built on, so it's made there, then moved to this sheet at the active cell.
+	 */
+	private insertChartFrom(source: string) {
+		const book = this.book;
+		if (!book || !this.commitEdit()) return;
+		const { sheet, range } = splitSource(source);
+		if (!range) return;
+		const from = sheet === null ? this.sheet : book.sheetIndex(sheet);
+		if (from < 0 || !this.info?.sheets[from]) {
+			new Notice(`There's no sheet named ${sheet ?? ""}.`);
+			return;
+		}
+		const here = this.sheet;
+		const hereName = this.info?.sheets[here]?.name;
+		const at = this.sel ? this.a1(this.sel) : "A1";
+		let id: number;
+		try {
+			const made = JSON.parse(book.run(from, "insert.chart", JSON.stringify({ range, type: "column" }))) as { chart?: number };
+			if (typeof made.chart !== "number") throw new Error("the chart wasn't made");
+			id = made.chart;
+			if (from !== here && hereName) book.run(from, "chart.move", JSON.stringify({ chart: id, sheet: hereName, at }));
+		} catch (e) {
+			new Notice(`GridCraft couldn't do that: ${errorText(e)}`);
+			return;
+		}
+		this.chartSel = id;
+		this.afterEdit();
+		this.chartLayer?.select(id);
+		this.scrollEl.querySelector(`.gc-chart[data-id="${id}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
 	}
 
 	private deleteChart(id: number) {

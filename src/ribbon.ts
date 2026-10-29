@@ -57,6 +57,8 @@ export interface RibbonHost {
 	resize(what: "width" | "height"): void;
 	/** Inserts a chart of the selected data. */
 	insertChart(type: string, subtype?: string): void;
+	/** Asks for a range on any sheet and inserts a chart of it here. */
+	insertChartFrom(): void;
 	/** Frozen [rows, columns] of the sheet, or null. */
 	frozen(): [number, number] | null;
 	/** The active cell in A1 notation. */
@@ -217,7 +219,9 @@ export class Ribbon {
 		this.button(g, "table", "Format as table", (e) => this.tableGallery(e.currentTarget as HTMLElement));
 		this.button(g, "bar-chart-2", "Insert chart", (e) => {
 			const m = new Menu();
-			for (const [title, type, subtype] of CHART_TYPES) m.addItem((i) => i.setTitle(title).onClick(() => this.host.insertChart(type, subtype)));
+			m.addItem((i) => i.setTitle("From another sheet…").setIcon("table").onClick(() => this.host.insertChartFrom()));
+				m.addSeparator();
+				for (const [title, type, subtype] of CHART_TYPES) m.addItem((i) => i.setTitle(title).onClick(() => this.host.insertChart(type, subtype)));
 			m.showAtMouseEvent(e);
 		});
 		this.button(g, "ruler", "Column width and row height", (e) => {

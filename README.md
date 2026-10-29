@@ -49,6 +49,13 @@ corner to resize it, and use the bar above it to change the type, title, legend,
 gridlines and colours, switch rows and columns, or delete it (Delete also works). Undo covers
 all of it.
 
+A chart can plot data from any sheet in the workbook. To chart a range on another sheet, choose
+**Insert chart › From another sheet…** and enter it, such as `Data!A1:D20` (or `'Q1 Sales'!A1:C9`
+for a name with spaces). The chart is placed where you are, as a column chart; change its type
+from its bar. To point an existing chart at other cells, select it and use **Select data**. A
+dashboard sheet's charts redraw as the other sheet's values change. Charts that read other
+workbook files aren't supported yet.
+
 Tables, conditional formats (fills, colour scales, data bars, icon sets) and cell colours show
 in the tab and in notes. In dark themes, text on a coloured fill switches to black or white so
 it stays readable.
@@ -116,6 +123,7 @@ plugin update downloads the matching engine once and removes the old one.
   sizes from the toolbar.
 - **0.6**: charts shown in tabs and notes; insert, move, resize, restyle and delete charts.
 - **0.7**: frozen panes shown and set (freeze panes, top row, first column, unfreeze).
+- **0.8**: charts plot data from other sheets (From another sheet, Select data).
 
 ## Building
 
